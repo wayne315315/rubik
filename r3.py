@@ -1,0 +1,87 @@
+import itertools
+import functools
+import numpy as np
+
+### List all 54 coordinates
+axes = (0,1,2)
+entries = (-1,0,1)
+coords = np.array([(*coord, n) for n, *coord in itertools.product(axes, entries, entries, entries) if coord[n] != 0])
+
+### Coordination system for Rubik's cube (x,y,z,n) ; x,y,z belongs to {-1,0,1}, normal vector n belongs to {0,1,2}
+### Operator system for Rubik's cube rotation (Xi, Yj, Zk)
+# axis : 0 -> x axis ; 1 -> y axis ; 2 -> z axis
+# level : the level of the plane of rotation, can be -1, 0, or 1
+def rotate(coords, axis, level):
+    # setup the unit vector of the rotation axis
+    ax = [0,0,0]
+    ax[axis] = 1
+
+    # any face within the plane of rotation can be categorized into 2 group based on their normal vector
+    # one tangent to the rotation plane, the other perpendicular to the plane
+    # cross product the axis vector with the given coordinate to obtain the location after 90 degree rotation
+    crosses = np.cross(ax, coords[:,:3])
+    crosses[:, axis] = level
+    ns = np.array([[n] if n == axis else list({0,1,2} - {n,axis}) for n in coords[:,-1]])
+    crosses = np.hstack([crosses, ns])
+
+    # any face out of the plane of rotation remains unchanged
+    coords = np.where(coords[:, axis, np.newaxis] != level, coords, crosses)
+    return coords
+
+@functools.lru_cache(None)
+def rotate_face(coord, axis, level):
+    ax = [0,0,0]
+    ax[axis] = 1
+
+    *loc, n = coord
+    cross = np.cross(ax, loc)
+    cross[axis] = level
+    n_ = n if n == axis else ({0,1,2} - {n,axis}).pop()
+    coord_ =  (*cross, n_) if coord[axis] == level else coord
+    return coord_
+
+### Create Rotation class to customize string representation
+class Rotation:
+    names = ["xp", "xn", "yp", "yn", "zp", "zn"]
+    pairs = list(itertools.product((0,1,2), (1,-1)))
+    n2p = dict(zip(names, pairs))
+    p2n = dict(zip(pairs, names))
+
+    def __init__(self, axis, level):
+        self.axis = axis
+        self.level = level
+    
+    def __repr__(self):
+        name = self.p2n[(self.axis, self.level)]
+        return name
+    
+    #"""
+    def __call__(self, coords):
+        return rotate(coords, self.axis, self.level)
+    #"""
+
+    """
+    def __call__(self, coords):
+        coords = np.array([rotate_face(tuple(face), self.axis, self.level) for face in coords])
+        return coords
+    """
+    
+    @classmethod
+    def fromstring(cls, name):
+        try:
+            assert name in cls.names
+        except AssertionError as err:
+            raise AssertionError("'%s' is not in  %s" % (name, cls.names))
+        axis, level = cls.n2p[name]
+        return Rotation(axis, level)
+
+# test if given rotation sequence is invariant to all coordinates
+def test_seq(seq, coords):
+    c = coords
+    for r in seq:
+        c = r(c)
+    return np.all(c == coords)
+
+### List all 6 rotations (x+, x-, y+, y-, z+, z-)
+rs = [Rotation(axis, level) for axis, level in itertools.product(axes, (1,-1))]
+xp, xn, yp, yn, zp, zn = rs
