@@ -6,6 +6,10 @@ import numpy as np
 axes = (0,1,2)
 entries = (-1,0,1)
 coords = np.array([(*coord, n) for n, *coord in itertools.product(axes, entries, entries, entries) if coord[n] != 0])
+corner, = np.where(np.all(coords[:,:-1] != 0, axis=-1))
+center, = np.where(np.sum(coords[:,:-1] == 0, axis=-1) == 2)
+edge = np.asarray([i for i in range(len(coords)) if i not in set(corner)|set(center)])
+
 
 ### Coordination system for Rubik's cube (x,y,z,n) ; x,y,z belongs to {-1,0,1}, normal vector n belongs to {0,1,2}
 ### Operator system for Rubik's cube rotation (Xi, Yj, Zk)
@@ -81,6 +85,20 @@ def test_seq(seq, coords):
     for r in seq:
         c = r(c)
     return np.all(c == coords)
+
+# test if given rotation sequence is invariant to all corners
+def test_corner(seq, coords):
+    c = coords
+    for r in seq:
+        c = r(c)
+    return np.all(c[corner] == coords[corner])
+
+# test if given rotation sequence is invariant to all edges
+def test_edge(seq, coords):
+    c = coords
+    for r in seq:
+        c = r(c)
+    return np.all(c[edge] == coords[edge])
 
 ### List all 6 rotations (x+, x-, y+, y-, z+, z-)
 rs = [Rotation(axis, level) for axis, level in itertools.product(axes, (1,-1))]
