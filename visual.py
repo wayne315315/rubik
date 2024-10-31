@@ -90,17 +90,18 @@ def animate(i, seq, coords_list, limit=2):
     ax.view_init(elev=elev, azim=azim)
     return fig,
 
-seq = [xp, yp] * 1
-coords_list = [coords]
-for r in seq:
-    coords_list.append(r(coords_list[-1]))
+if __name__ == "__main__":
+    seq = [xp, yp] * 1
+    coords_list = [coords]
+    for r in seq:
+        coords_list.append(r(coords_list[-1]))
 
-frames = 360 * (len(seq) + 1)
-interval = 1
-fps = 90
+    frames = 360 * (len(seq) + 1)
+    interval = 1
+    fps = 90
 
-anim = animation.FuncAnimation(fig, animate, frames=frames, interval=interval, blit=True, fargs=(seq, coords_list))
-writer = animation.FFMpegWriter(fps=fps)
-anim.save("rubik.mp4", writer=writer)
-#writer = animation.PillowWriter(fps=fps)
-#anim.save('rubik.gif',writer=writergif)
+    anim = animation.FuncAnimation(fig, animate, frames=frames, interval=interval, blit=True, fargs=(seq, coords_list))
+    writer = animation.FFMpegWriter(fps=fps)
+    anim.save("rubik.mp4", writer=writer)
+    #writer = animation.PillowWriter(fps=fps)
+    #anim.save('rubik.gif',writer=writergif)

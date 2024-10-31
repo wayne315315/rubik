@@ -1,5 +1,7 @@
 import itertools
 import functools
+from collections import defaultdict
+
 import numpy as np
 
 ### List all 54 coordinates
@@ -10,6 +12,17 @@ corner, = np.where(np.all(coords[:,:-1] != 0, axis=-1))
 center, = np.where(np.sum(coords[:,:-1] == 0, axis=-1) == 2)
 edge = np.asarray([i for i in range(len(coords)) if i not in set(corner)|set(center)])
 
+# block <-> index mapping
+b2i = defaultdict(list)
+i2b = {}
+for i, (*b, n) in enumerate(coords):
+    b2i[tuple(b)].append(i)
+    i2b[i] = tuple(b)
+b2i = dict(b2i)
+
+# coordinate <-> index mapping
+c2i = {tuple(coord): i for i, coord in enumerate(coords)}
+i2c = {i: tuple(coord) for i, coord in enumerate(coords)}
 
 ### Coordination system for Rubik's cube (x,y,z,n) ; x,y,z belongs to {-1,0,1}, normal vector n belongs to {0,1,2}
 ### Operator system for Rubik's cube rotation (Xi, Yj, Zk)
