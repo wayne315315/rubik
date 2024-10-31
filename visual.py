@@ -5,6 +5,8 @@ from matplotlib import animation
 from r3 import coords
 from r3 import xp, xn, yp, yn, zp, zn
 
+# prerequisites : sudo apt install ffmpeg
+
 # face colors
 # (x+, x-, y+, y-, z+, z-) : (blue, green, red, orange, yellow, white)
 hex = {
