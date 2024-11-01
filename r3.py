@@ -66,7 +66,7 @@ class Rotation:
         if item.shape != coords.shape and item.shape != (len(coords),):
             raise ValueError("item needs to be either coordinates or indices") 
         indices = np.asarray([c2i[tuple(c)] for c in item]) if item.shape == coords.shape else item.copy()
-        indices = [self.indices[indices[i]] for i in range(len(indices))]
+        indices = np.asarray([self.indices[indices[i]] for i in range(len(indices))])
         item = coords[indices] if item.shape == coords.shape else indices
 
         return item
