@@ -1,5 +1,4 @@
 import itertools
-import functools
 from collections import defaultdict
 
 import numpy as np
@@ -46,43 +45,31 @@ def rotate(coords, axis, level):
     coords = np.where(coords[:, axis, np.newaxis] != level, coords, crosses)
     return coords
 
-@functools.lru_cache(None)
-def rotate_face(coord, axis, level):
-    ax = [0,0,0]
-    ax[axis] = 1
-
-    *loc, n = coord
-    cross = np.cross(ax, loc)
-    cross[axis] = level
-    n_ = n if n == axis else ({0,1,2} - {n,axis}).pop()
-    coord_ =  (*cross, n_) if coord[axis] == level else coord
-    return coord_
-
 ### Create Rotation class to customize string representation
 class Rotation:
     names = ["xp", "xn", "yp", "yn", "zp", "zn"]
     pairs = list(itertools.product((0,1,2), (1,-1)))
     n2p = dict(zip(names, pairs))
     p2n = dict(zip(pairs, names))
+    global coords, corner, edge, center, index, b2i, i2b, c2i, i2c
 
     def __init__(self, axis, level):
         self.axis = axis
         self.level = level
+        self.indices = [c2i[tuple(c)] for c in rotate(coords, axis, level)]
     
     def __repr__(self):
         name = self.p2n[(self.axis, self.level)]
         return name
     
-    #"""
-    def __call__(self, coords):
-        return rotate(coords, self.axis, self.level)
-    #"""
+    def __call__(self, item):
+        if item.shape != coords.shape and item.shape != (len(coords),):
+            raise ValueError("item needs to be either coordinates or indices") 
+        indices = np.asarray([c2i[tuple(c)] for c in item]) if item.shape == coords.shape else item.copy()
+        indices = [self.indices[indices[i]] for i in range(len(indices))]
+        item = coords[indices] if item.shape == coords.shape else indices
 
-    """
-    def __call__(self, coords):
-        coords = np.array([rotate_face(tuple(face), self.axis, self.level) for face in coords])
-        return coords
-    """
+        return item
     
     @classmethod
     def fromstring(cls, name):
