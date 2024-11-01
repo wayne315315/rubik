@@ -11,6 +11,7 @@ coords = np.array([(*coord, n) for n, *coord in itertools.product(axes, entries,
 corner, = np.where(np.all(coords[:,:-1] != 0, axis=-1))
 center, = np.where(np.sum(coords[:,:-1] == 0, axis=-1) == 2)
 edge = np.asarray([i for i in range(len(coords)) if i not in set(corner)|set(center)])
+index = np.asarray([i for i in range(len(coords))])
 
 # block <-> index mapping
 b2i = defaultdict(list)
