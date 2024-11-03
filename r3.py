@@ -76,7 +76,7 @@ class Rotation:
         self.axis = axis
         self.level = level
         self.orient = orient
-        self.indices = [c2i[tuple(c)] for c in rotate(coords, axis, level, orient)]
+        self.indices = tuple([c2i[tuple(c)] for c in rotate(coords, axis, level, orient)])
 
     
     def __repr__(self):
@@ -85,7 +85,7 @@ class Rotation:
     
     def __lt__(self, other):
         return str(self) < str(other)
-    
+
     def __call__(self, item):
         if item.shape != coords.shape and item.shape != (len(coords),):
             raise ValueError("item needs to be either coordinates or indices") 
@@ -104,26 +104,32 @@ class Rotation:
         axis, level = cls.n2p[name]
         return Rotation(axis, level)
 
-# test if given rotation sequence is invariant to all coordinates
-def test_seq(seq, coords):
-    c = coords
-    for r in seq:
-        c = r(c)
-    return np.all(c == coords)
 
-# test if given rotation sequence is invariant to all corners
-def test_corner(seq, coords):
-    c = coords
-    for r in seq:
-        c = r(c)
-    return np.all(c[corner] == coords[corner])
+class RotationSequence:
+    def __init__(self, seq):
+        self.seq = tuple(seq)
+        indices = index.copy()
+        for r in seq:
+            indices = r(indices)
+        self.indices = tuple(indices)
 
-# test if given rotation sequence is invariant to all edges
-def test_edge(seq, coords):
-    c = coords
-    for r in seq:
-        c = r(c)
-    return np.all(c[edge] == coords[edge])
+    def __repr__(self):
+        name = " -> ".join([str(r) for r in self.seq])
+        return name
+
+    def __lt__(self, other):
+        return str(self) < str(other)
+
+    def __eq__(self, other):
+        return self.indices == other.indices
+
+    def __call__(self, item):
+        if item.shape != coords.shape and item.shape != (len(coords),):
+            raise ValueError("item needs to be either coordinates or indices") 
+        indices = np.asarray([c2i[tuple(c)] for c in item]) if item.shape == coords.shape else item.copy()
+        indices = np.asarray([self.indices[indices[i]] for i in range(len(indices))])
+        item = coords[indices] if item.shape == coords.shape else indices
+        return item
 
 ### List all 6 rotations (x+, x-, y+, y-, z+, z-)
 rs = [Rotation(axis, level, orient) for axis, level, orient in Rotation.pairs]
