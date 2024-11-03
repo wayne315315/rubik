@@ -2,8 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 
-from r3 import coords, rs
-from r3 import xpp, xpn, x0p, x0n, xnp, xnn, ypp, ypn, y0p, y0n, ynp, ynn, zpp, zpn, z0p, z0n, znp, znn
+from r3 import coords
 
 # prerequisites : sudo apt install ffmpeg
 
@@ -20,8 +19,6 @@ hex = {
 
 colors = np.array([hex[(coords[i][-1], coords[i][coords[i][-1]])] for i in range(len(coords))])
 
-fig = plt.figure()
-ax = fig.add_subplot(projection="3d")
 
 def draw(ax, coord, color):
     # 2 * 2 grid
@@ -68,12 +65,9 @@ def draw_rotation(ax, r, radius=2.5, theta_bgn=0, theta_end=350):
     ax.plot(x[:-1], y[:-1], z[:-1], color="red")
     # draw arrowhead
     ax.quiver(x[-2], y[-2], z[-2], x[-1]-x[-2], y[-1]-y[-2], z[-1]-z[-2], arrow_length_ratio=5, color="red")
-    # label rotation
-    ax.text2D(0.05, 0.95, str(r), color='red', fontsize='large', transform=ax.transAxes)
 
 def animate(i, seq, coords_list, angle_per_frame, limit=2):
     angle = i * angle_per_frame
-    seq += [None]
     ax = plt.gca()
     if angle % 360 == 0:
         ax.cla()
@@ -81,11 +75,15 @@ def animate(i, seq, coords_list, angle_per_frame, limit=2):
         ax.set_ylim(-limit, limit)
         ax.set_zlim(-limit, limit)
         plt.axis("off")
-        r = seq[angle // 360]
+        r_prior = seq[angle // 360 - 1] if angle // 360 > 0 else None
+        r = seq[angle // 360] if angle // 360 < len(seq) else None
         coords = coords_list[angle // 360]
         draw_cube(ax, coords)
         draw_axes(ax)
         draw_rotation(ax, r)
+        # label rotation
+        ax.text2D(0.05, 0.95, "Prior: %s" % str(r_prior), color='green', fontsize='large', transform=ax.transAxes)
+        ax.text2D(0.05, 0.9, "Next: %s" % str(r), color='red', fontsize='large', transform=ax.transAxes)
 
     azim = angle % 360
     elev = (angle * 4) % 360
@@ -95,20 +93,44 @@ def animate(i, seq, coords_list, angle_per_frame, limit=2):
         elev -= 360
     elev /= 6
     ax.view_init(elev=elev, azim=azim)
-    return fig,
+    return plt.gcf(),
 
-if __name__ == "__main__":
-    seq = [x0n, x0p, ypn, z0n] * 1
-    coords_list = [coords]
+def export_video(coords_init, seq, filename, angle_per_frame=6, interval=1, fps=12):
+    fig = plt.gcf()
+    fig.add_subplot(projection="3d")
+    coords_list = [coords_init]
     for r in seq:
         coords_list.append(r(coords_list[-1]))
-
-    angle_per_frame = 6
     frames = (360 // angle_per_frame) * (len(seq) + 1)
-    interval = 1
-    fps = 12
-
     anim = animation.FuncAnimation(fig, animate, frames=frames, interval=interval, blit=True, fargs=(seq, coords_list, angle_per_frame))
     # mp4 format
     writer = animation.FFMpegWriter(fps=fps)
-    anim.save("rubik.mp4", writer=writer)
+    anim.save(filename, writer=writer)
+    fig.clear()
+    
+if __name__ == "__main__":
+    from r3 import index, c2i, i2c
+    from r3 import rs, xpp, xpn, x0p, x0n, xnp, xnn, ypp, ypn, y0p, y0n, ynp, ynn, zpp, zpn, z0p, z0n, znp, znn
+    from solver import brute_force_multi
+
+    # question
+    seq = [x0n, xpp, ypn, z0n]
+    index_q = index.copy()
+    coords_q = coords.copy()
+    for r in seq:
+        index_q = r(index_q)
+        coords_q = r(coords_q)
+
+    # solver
+    ans = list(sorted(brute_force_multi(index_q), key=len)[0])
+    index_ans = index_q.copy()
+    coords_ans = coords_q.copy()
+    for r in ans:
+        index_ans = r(index_ans)
+        coords_ans = r(coords_ans)
+
+    print("Question: %s" % " -> ".join([str(r) for r in seq]))
+    print("Answer: %s" % " -> ".join([str(r) for r in ans]))
+    export_video(coords, seq, "question.mp4")
+    export_video(coords_q, ans, "answer.mp4")
+    print("Exported question.mp4 and answer.mp4")

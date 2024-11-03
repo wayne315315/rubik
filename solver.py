@@ -32,13 +32,13 @@ def dfs(index_q, level=8):
 def generate_seq(rs, level_max, verbose=False):
     for level in range(level_max+1):
         if verbose:
-            print(f"\nLevel: {level}")
+            print(f"Level: {level}")
         for seq in itertools.product(rs, repeat=level):
             yield seq
 
-def worker(i, q2, index_q, level_max):
+def worker(i, q2, index_q, level_max, verbose):
     n = cpu_count()
-    seq_gen = enumerate(generate_seq(rs, level_max)) if i else tqdm(enumerate(generate_seq(rs, level_max, verbose=True)))
+    seq_gen = enumerate(generate_seq(rs, level_max)) if i else tqdm(enumerate(generate_seq(rs, level_max, verbose=verbose)))
     for j, seq in seq_gen:
         if j % n == i:
             indices = index_q.copy()
@@ -56,10 +56,10 @@ def util(q2, q3):
         q3.put(seq)
 
 
-def brute_force_multi(index_q, level_max=60):
+def brute_force_multi(index_q, level_max=60, verbose=False):
     q2 = Queue()
     q3 = Queue()
-    ps = [Process(target=worker, args=(i, q2, index_q, level_max) ) for i in range(cpu_count())]
+    ps = [Process(target=worker, args=(i, q2, index_q, level_max, verbose) ) for i in range(cpu_count())]
     p_util = Process(target=util, args=(q2, q3))
     p_util.start()
     for p in ps:
@@ -70,9 +70,8 @@ def brute_force_multi(index_q, level_max=60):
 
     for p in ps:
         p.terminate()
-
-    while any(p.is_alive() for p in ps):
-        pass
+    for p in ps:
+        p.join()
 
     ans = []
     while True:
@@ -84,6 +83,7 @@ def brute_force_multi(index_q, level_max=60):
         else:
             ans.append(seq)
     p_util.join()
+    print("")
 
     return ans
 
@@ -96,12 +96,12 @@ if __name__ == "__main__":
     for r in seq:
         index_q = r(index_q)
     ###
-    ans_all =  brute_force_multi(index_q)
+    answers =  brute_force_multi(index_q)
     ###
     
     print("")
     print("Answer")
-    for ans in ans_all:
+    for ans in answers:
         indices = index_q.copy()
         for r in ans:
             indices = r(indices)
