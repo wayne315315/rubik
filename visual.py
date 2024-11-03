@@ -114,7 +114,7 @@ if __name__ == "__main__":
     from solver import brute_force_multi
 
     # question
-    seq = [x0n, xpp, ypn, z0n]
+    seq = (xpp, y0p, zpn, y0n)
     index_q = index.copy()
     coords_q = coords.copy()
     for r in seq:

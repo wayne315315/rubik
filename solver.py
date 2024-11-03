@@ -59,7 +59,7 @@ def util(q2, q3):
 def brute_force_multi(index_q, level_max=60, verbose=False):
     q2 = Queue()
     q3 = Queue()
-    ps = [Process(target=worker, args=(i, q2, index_q, level_max, verbose) ) for i in range(cpu_count())]
+    ps = [Process(target=worker, args=(i, q2, index_q, level_max, verbose)) for i in range(cpu_count())]
     p_util = Process(target=util, args=(q2, q3))
     p_util.start()
     for p in ps:
