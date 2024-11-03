@@ -4,9 +4,8 @@ from multiprocessing import Process, Queue, cpu_count
 import numpy as np
 from tqdm import tqdm
 
-from r3 import coords, corner, edge, center, index
-from r3 import xp, xn, yp, yn, zp, zn, rs
-from r3 import b2i, i2b, c2i, i2c
+from r3 import index
+from r3 import rs
 
 # DFS
 def dfs(index_q, level=8):
@@ -90,15 +89,20 @@ def brute_force_multi(index_q, level_max=60):
 
 if __name__ == "__main__":
     import random
-    k = random.randrange(5,10)
+    k = random.randrange(3,7)
     seq = random.choices(rs, k=k)
     print("Question", k, seq)
     index_q = index
     for r in seq:
         index_q = r(index_q)
-    #print(dfs(index_q))
+    ###
     ans_all =  brute_force_multi(index_q)
+    ###
+    
     print("")
     print("Answer")
     for ans in ans_all:
-        print(ans)
+        indices = index_q.copy()
+        for r in ans:
+            indices = r(indices)
+        print(ans, np.all(indices == index))

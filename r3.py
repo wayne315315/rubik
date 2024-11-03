@@ -28,7 +28,7 @@ i2c = {i: tuple(coord) for i, coord in enumerate(coords)}
 ### Operator system for Rubik's cube rotation (Xi, Yj, Zk)
 # axis : 0 -> x axis ; 1 -> y axis ; 2 -> z axis
 # level : the level of the plane of rotation, can be -1, 0, or 1
-def rotate(coords, axis, level):
+def _rotate(coords, axis, level):
     # setup the unit vector of the rotation axis
     ax = [0,0,0]
     ax[axis] = 1
@@ -45,22 +45,42 @@ def rotate(coords, axis, level):
     coords = np.where(coords[:, axis, np.newaxis] != level, coords, crosses)
     return coords
 
+def rotate(coords, axis, level, orient):
+    stack = [(axis, level, orient)]
+    seq = []
+    while stack:
+        axis, level, orient = stack.pop()
+        if level == 0:
+            stack.append((axis, 1, -orient))
+            stack.append((axis, -1, -orient))
+        elif orient == -1:
+            for _ in range(3):
+                seq.append((axis, level))
+        else:
+            seq.append((axis, level))
+
+    seq = seq[::-1]
+    for axis, level in seq:
+        coords = _rotate(coords, axis, level)
+    return coords
+
 ### Create Rotation class to customize string representation
 class Rotation:
-    names = ["xp", "xn", "yp", "yn", "zp", "zn"]
-    pairs = list(itertools.product((0,1,2), (1,-1)))
+    names = ["".join(item) for item in itertools.product(("x", "y", "z"), ("p","0", "n"), ("p","n"))]
+    pairs = list(itertools.product((0,1,2), (1,0,-1), (1,-1)))
     n2p = dict(zip(names, pairs))
     p2n = dict(zip(pairs, names))
+   
     global coords, corner, edge, center, index, b2i, i2b, c2i, i2c
-
-    def __init__(self, axis, level):
+    def __init__(self, axis, level, orient):
         self.axis = axis
         self.level = level
-        self.indices = [c2i[tuple(c)] for c in rotate(coords, axis, level)]
+        self.orient = orient
+        self.indices = [c2i[tuple(c)] for c in rotate(coords, axis, level, orient)]
 
     
     def __repr__(self):
-        name = self.p2n[(self.axis, self.level)]
+        name = self.p2n[(self.axis, self.level, self.orient)]
         return name
     
     def __lt__(self, other):
@@ -106,5 +126,5 @@ def test_edge(seq, coords):
     return np.all(c[edge] == coords[edge])
 
 ### List all 6 rotations (x+, x-, y+, y-, z+, z-)
-rs = [Rotation(axis, level) for axis, level in itertools.product(axes, (1,-1))]
-xp, xn, yp, yn, zp, zn = rs
+rs = [Rotation(axis, level, orient) for axis, level, orient in Rotation.pairs]
+xpp, xpn, x0p, x0n, xnp, xnn, ypp, ypn, y0p, y0n, ynp, ynn, zpp, zpn, z0p, z0n, znp, znn = rs
