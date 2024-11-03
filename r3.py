@@ -57,10 +57,14 @@ class Rotation:
         self.axis = axis
         self.level = level
         self.indices = [c2i[tuple(c)] for c in rotate(coords, axis, level)]
+
     
     def __repr__(self):
         name = self.p2n[(self.axis, self.level)]
         return name
+    
+    def __lt__(self, other):
+        return str(self) < str(other)
     
     def __call__(self, item):
         if item.shape != coords.shape and item.shape != (len(coords),):
