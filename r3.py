@@ -118,10 +118,16 @@ class RotationSequence:
         return name
 
     def __lt__(self, other):
-        return str(self) < str(other)
+        return (len(self), str(self)) < (len(other), str(other))
+    
+    def __len__(self):
+        return len(self.seq)
 
     def __eq__(self, other):
         return self.indices == other.indices
+    
+    def __add__(self, other):
+        return RotationSequence(self.seq + other.seq)
 
     def __call__(self, item):
         if item.shape != coords.shape and item.shape != (len(coords),):
