@@ -1,8 +1,8 @@
 # rubik
 
 A small, NumPy-based Rubik's cube toolkit: a coordinate model of the cube, a
-permutation-based rotation system, a brute-force solver, and a 3D animation
-exporter built on matplotlib.
+permutation-based rotation system, a fast Thistlethwaite solver, an optimal
+IDA* solver, and 3D animation exporters built on matplotlib.
 
 ## Features
 
@@ -13,10 +13,19 @@ exporter built on matplotlib.
   in both directions, each precomputed as a permutation of sticker indices.
 - **Composable sequences** – `RotationSequence` composes rotations, compares
   them by their resulting permutation, and supports `+` for concatenation.
+- **Fast solver** – a Thistlethwaite four-phase solver with complete
+  distance tables per phase. Solves any scramble in about 2 ms with roughly
+  50 rotations, after a one-off 2 s table build that is cached to disk.
+- **Optimal solver** – IDA* with four pattern databases, vectorised with
+  numpy. Guarantees the shortest solution in the r3, quarter-turn, or
+  half-turn metric.
+- **God's number bounds** – a script that bounds God's number for the r3
+  move set by counting canonical sequences and by solving hard positions.
 - **Brute-force solver** – a multiprocess, breadth-first search over all
-  move sequences of increasing length.
-- **Video export** – render a scramble or a solution as a rotating 3D
-  animation and save it as `.mp4`.
+  move sequences of increasing length, kept as a reference implementation.
+- **Video export** – render a scramble or a solution as an `.mp4`, either
+  with a fixed camera and smoothly turning slices (`visual2.py`) or with an
+  orbiting camera (`visual.py`).
 
 ## Requirements
 
@@ -76,6 +85,109 @@ solved when `np.all(state == index)`.
 ### Solving
 
 ```python
+from r3 import index, rs, RotationSequence
+from thistlethwaite import solve
+import random
+
+question = RotationSequence(random.choices(rs, k=50))
+state = question(index)
+
+answer = RotationSequence(solve(state))       # list of r3 Rotation objects
+assert answer(state).tolist() == index.tolist()
+print(answer)
+```
+
+`solve` accepts either an index vector or a coordinate array and returns a
+list of `Rotation` objects, so the result plugs straight into
+`RotationSequence` and `visual.export_video`. It raises `ValueError` for a
+state that no sequence of rotations can produce.
+
+The first call builds four breadth-first tables (about 2 s) and caches them
+in `thistlethwaite_tables.pickle`. Later runs load the cache. Run the module
+directly to solve and verify a batch of random scrambles:
+
+```bash
+python thistlethwaite.py 500
+```
+
+#### How the fast solver works
+
+The solver walks the cube group down a chain of nested subgroups, using the
+`z` axis as up/down, `x` as front/back, and `y` as right/left:
+
+| Phase | Goal                                                 | Moves allowed                   | States    | Max depth |
+| ----- | ---------------------------------------------------- | ------------------------------- | --------- | --------- |
+| 1     | Orient all 12 edges                                  | any                             | 2,048     | 6         |
+| 2     | Orient all 8 corners, E-slice edges into the E slice | `z`, `y` quarter turns, half turns | 1,082,565 | 10        |
+| 3     | M-slice edges into the M slice, corners into tetrads | `z` quarter turns, half turns   | 2,822,400 | 13        |
+| 4     | Finish                                               | half turns only                 | 663,552   | 15        |
+
+Each phase tracks a small coordinate (for example the positions of the
+twelve edge reference stickers) that fully captures its sub-problem. A
+complete distance table is built over that coordinate space, so each phase is
+solved by greedily stepping to any neighbour one move closer to the goal.
+Every move's effect on a coordinate is derived by applying the r3 `Rotation`
+objects themselves, so no cube mechanics are hard-coded in the solver.
+
+#### Optimal solver
+
+```python
+from optimal import solve
+
+answer = solve(state)                 # fewest r3 rotations, guaranteed
+answer = solve(state, metric="htm")   # fewest half-turn-metric moves
+```
+
+`optimal.solve` runs IDA* (iterative deepening A*) with an admissible
+heuristic taken from four pattern databases, so the first solution it finds
+is provably the shortest for the chosen metric:
+
+| Metric | Moves, each costing 1                             |
+| ------ | ------------------------------------------------- |
+| `r3`   | the 18 r3 rotations (12 quarter turns + 6 middle-slice rotations) |
+| `qtm`  | 12 quarter turns                                  |
+| `htm`  | 12 quarter turns + 6 half turns                   |
+
+The state is a 6-tuple of small coordinates (corner orientation and
+permutation, edge orientation, and the ordered positions of the E, M, and S
+slice edges), each with a tiny move table. The pattern databases are exact
+distances over pairs of those coordinates (88 M + 3 × 24 M entries, about
+160 MB), built once in about 35 s and cached in `optimal_tables_<metric>.pickle`.
+The search itself is depth-first over numpy arrays of nodes, examining tens of
+millions of nodes per second per core, and prunes redundant same-axis move
+runs with a small automaton. Once an iteration grows past a million nodes,
+the tree is split a few levels below the root into thousands of independent
+subtrees that are searched on every CPU core in parallel (`workers` argument,
+default all cores). Any solution found in an iteration is optimal because all
+smaller bounds were exhausted first.
+
+Running time still grows exponentially with the optimal length, roughly a
+factor of 10 per extra move. On a 192-core machine a fully random state
+(optimal 18 r3 rotations, about 5×10¹⁰ nodes) takes about 35 s. Run the module
+directly to compare against the Thistlethwaite answer on a random scramble:
+
+```bash
+python optimal.py r3 12          # metric, scramble length, optional seed
+```
+
+#### God's number for the r3 move set
+
+```bash
+python gods_number.py              # rigorous counting lower bound, instant
+python gods_number.py --random 5   # optimal lengths of 5 random states
+python gods_number.py --hard       # four-spot, superflip, superflip + four-spot
+```
+
+The exact value is out of reach on a single machine (the half-turn-metric
+result of 20 took about 35 CPU-years). The script prints what can be
+established: a lower bound from counting canonical sequences (18 for the r3
+move set), optionally raised by any position it solves optimally, and the
+upper bound 26 inherited from the quarter-turn metric, since every
+quarter-turn sequence is also an r3 sequence.
+
+#### Brute-force reference solver
+
+```python
 from r3 import index, xpp, y0p, zpn, y0n
 from solver import brute_force_multi
 
@@ -104,27 +216,41 @@ Running the solver directly generates a random scramble and solves it:
 python solver.py
 ```
 
-### Video export
+### Demo
 
 ```bash
-python visual.py
+python demo.py                    # 30 random moves, then solve and render
+python demo.py -n 50 --seed 7     # reproducible 50-move scramble
+python demo.py --no-video         # solve and verify only
+python demo.py --orbit            # orbiting-camera style from visual.py
+python demo.py -n 12 --optimal    # shortest possible answer
 ```
 
-This scrambles the cube with a fixed four-move sequence, solves it, and writes
-two files:
+The demo scrambles the cube, solves it with the fast solver, verifies the
+answer, and writes two videos (under a minute of rendering for a 30-move
+scramble):
 
 - `question.mp4` – the scramble applied to a solved cube.
 - `answer.mp4` – the solution applied to the scrambled cube.
 
-Each move is shown as one full camera orbit, with a red arc indicating the
-slice and direction of the upcoming turn and the previous and next move
-labelled in the corner.
+By default the videos come from `visual2.py`: the camera stays fixed, two
+views show opposite corners of the cube so every face is visible, and each
+move is animated as a smooth 90° slice turn followed by a short hold. Use
+`--frames-per-turn` to change the turn speed.
 
-To render your own sequence:
+With `--orbit` the videos come from `visual.py` instead: the cube snaps
+between states and the camera makes one full orbit per move, with a red arc
+indicating the slice and direction of the upcoming turn. Use
+`--angle-per-frame 6` for a smoother, slower orbit.
+
+Both renderers show r3 middle-slice rotations the way r3 defines them, as
+the two outer slices turning the opposite way.
+
+To render your own sequence with either renderer:
 
 ```python
 from r3 import coords, xpp, ynn, z0p
-from visual import export_video
+from visual2 import export_video          # or: from visual import export_video
 
 export_video(coords, (xpp, ynn, z0p), "my_sequence.mp4")
 ```
@@ -137,8 +263,13 @@ Face colors follow the standard scheme: `x+` blue, `x-` green, `y+` red,
 | File              | Purpose                                                        |
 | ----------------- | -------------------------------------------------------------- |
 | `r3.py`           | Coordinate system, index mappings, `Rotation`, `RotationSequence` |
-| `solver.py`       | `dfs` and the multiprocess `brute_force_multi` solver           |
-| `visual.py`       | matplotlib 3D drawing and `export_video`                        |
+| `thistlethwaite.py` | Fast four-phase solver, `solve`                              |
+| `optimal.py`      | Optimal IDA* solver with pattern databases, `solve`             |
+| `gods_number.py`  | Bounds on God's number for the r3 move set                     |
+| `solver.py`       | `dfs` and the multiprocess `brute_force_multi` reference solver |
+| `visual2.py`      | Fixed-camera renderer with animated slice turns, `export_video` |
+| `visual.py`       | Orbiting-camera renderer, `export_video`                        |
+| `demo.py`         | Scramble, solve, verify, and export both videos                 |
 | `requirements.txt`| Pinned Python dependencies                                     |
 
 ## How rotations work
