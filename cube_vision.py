@@ -1,7 +1,8 @@
 """Two corner-view photos -> cube state -> RotationSequence.
 
-An open-source vision-language model (default qwen3.8:27b on the Ollama server at
-192.168.1.254) does the *perception*: it reads the 54 sticker colours into JSON.
+An open-source vision-language model served by Ollama (default qwen3.8:27b on the
+DGX Spark at 192.168.1.254) does the *perception*: it reads the 54 sticker colours
+into JSON.
 Deterministic code does the *geometry* (image grid -> r3 coordinates), validates
 the reading, repairs or re-reads when it cannot be a real cube, and the existing
 solvers do the *planning* (state -> RotationSequence). See COOKBOOK.md.
@@ -23,13 +24,15 @@ visible and meet at the corner nearest the camera, in the image centre:
     lower_left[i][j]  i = row top->bottom, j = column left->right (col 2 at the edge)
     lower_right[i][j] i = row top->bottom, j = column left->right (col 0 at the edge)
 
-Which physical face is which is detected from the three centre stickers, so the
-cube may be turned in-plane however you like; a mirror-image (impossible) view is
-rejected by a handedness check.
+The photo may be rotated in-plane by any angle: before reading, the model is asked
+for the clock position of each face's centre sticker and the image is rotated so
+that one face sits at the top. Which physical face is which is then detected from
+the three centre stickers; a mirror-image (impossible) view is rejected by a
+handedness check.
 
 Reading strategy (measured on the example photos, see COOKBOOK.md):
   round 1  one request per photo, thinking on                 -> 54/54 stickers
-  round 2  one request per face                               -> 52/54 without thinking
+  round 2  one request per face, thinking off (fast extra votes) -> 52/54
   round 3+ re-read with the validation error as feedback and majority-vote all
            readings so far
   after every round a bounded repair tries single-sticker / single-piece fixes
@@ -46,7 +49,6 @@ import io
 import json
 import re
 import time
-import urllib.error
 import urllib.request
 from collections import Counter
 
@@ -143,6 +145,23 @@ Report ONLY the {face} face of this photo, as a JSON object {{"grid": [[...],[..
 using the {face}[i][j] indexing defined above. Use the other two faces only to orient
 yourself."""
 
+ORIENT_PROMPT = """This photo shows three faces of a 3x3x3 Rubik's cube meeting at the corner closest
+to the camera, near the centre of the image. The photo may be rotated at any angle.
+
+For each of the three visible faces, report the colour of its CENTRE sticker (one of
+white, yellow, red, orange, blue, green) and the direction from the point where the
+three faces meet to that centre sticker, as a clock position: 12 = straight up,
+3 = right, 6 = straight down, 9 = left. Decimals are allowed, e.g. 10.5.
+
+Output ONLY JSON: {"faces": [{"color": "...", "clock": 12}, {"color": "...", "clock": 4},
+{"color": "...", "clock": 8}]}"""
+
+ORIENT_SCHEMA = {"type": "object", "properties": {"faces": {"type": "array", "items": {
+    "type": "object", "properties": {"color": {"type": "string", "enum": COLORS},
+                                     "clock": {"type": "number"}},
+    "required": ["color", "clock"], "additionalProperties": False}}},
+    "required": ["faces"], "additionalProperties": False}
+
 FEEDBACK = """
 
 A previous reading of this photo was rejected for this reason:
@@ -153,9 +172,12 @@ Look at the photo again, sticker by sticker, and output the corrected JSON."""
 # ----------------------------------------------------------------------------
 # Talking to the model
 # ----------------------------------------------------------------------------
-def encode_image(path, max_side=1024):
-    """Downscale to max_side px and return JPEG bytes; 1024 read best in tests."""
+def encode_image(path, max_side=1024, rotate=0.0):
+    """Downscale to max_side px (1024 read best in tests), optionally rotating the
+    image counter-clockwise by `rotate` degrees first, and return JPEG bytes."""
     img = Image.open(path).convert("RGB")
+    if rotate % 360:
+        img = img.rotate(rotate, resample=Image.BICUBIC, expand=True, fillcolor=(96, 96, 96))
     scale = max_side / max(img.size)
     if scale < 1:
         img = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
@@ -164,11 +186,9 @@ def encode_image(path, max_side=1024):
     return buf.getvalue()
 
 
-def _post(url, payload, api_key=None, timeout=1800):
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+def _post(url, payload, timeout=1800):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
@@ -186,61 +206,85 @@ def extract_json(text):
 
 
 class Reader:
-    """One model behind either Ollama's native API or an OpenAI-compatible endpoint."""
+    """One model behind Ollama's native API (/api/chat), with thinking and JSON schema."""
 
-    def __init__(self, base_url="http://192.168.1.254:11434", model="qwen3.8:27b", backend="auto",
-                 think=True, api_key=None, max_side=1024, num_ctx=16384, num_predict=16000, verbose=True):
+    def __init__(self, base_url="http://192.168.1.254:11434", model="qwen3.8:27b", think=True,
+                 max_side=1024, num_ctx=16384, num_predict=16000, verbose=True):
         self.base_url = base_url.rstrip("/")
-        if backend == "auto":
-            backend = "ollama" if ":11434" in self.base_url or not self.base_url.endswith("/v1") else "openai"
-        self.backend, self.model, self.think, self.api_key = backend, model, think, api_key
+        self.model, self.think = model, think
         self.max_side, self.num_ctx, self.num_predict, self.verbose = max_side, num_ctx, num_predict, verbose
         self.calls = 0
+        self.rotations = {}                       # image path -> degrees applied before reading
 
-    def chat(self, image, prompt, schema, temperature=0.0):
+    def chat(self, image, prompt, schema, temperature=0.0, rotate=0.0, think=None):
         """Send one image + prompt, return the parsed JSON object."""
         self.calls += 1
         t0 = time.time()
-        data = encode_image(image, self.max_side)
-        if self.backend == "ollama":
-            url = (self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url) + "/api/chat"
-            payload = {"model": self.model, "stream": False, "think": self.think, "format": schema,
-                       "options": {"temperature": temperature, "num_ctx": self.num_ctx,
-                                   "num_predict": self.num_predict},
-                       "messages": [{"role": "user", "content": prompt,
-                                     "images": [base64.b64encode(data).decode()]}]}
-            reply = _post(url, payload)["message"]["content"]
-        else:
-            url = self.base_url + "/chat/completions"
-            content = [{"type": "image_url", "image_url": {
-                "url": "data:image/jpeg;base64," + base64.b64encode(data).decode()}},
-                {"type": "text", "text": prompt}]
-            payload = {"model": self.model, "temperature": temperature, "max_tokens": self.num_predict,
-                       "messages": [{"role": "user", "content": content}]}
-            fmt = {"type": "json_schema", "json_schema": {"name": "cube", "schema": schema}}
-            try:
-                resp = _post(url, dict(payload, response_format=fmt), self.api_key)
-            except urllib.error.HTTPError as e:
-                if e.code != 400:
-                    raise
-                resp = _post(url, payload, self.api_key)
-            reply = resp["choices"][0]["message"]["content"] or ""
-            if isinstance(reply, list):
-                reply = "".join(part.get("text", "") for part in reply)
+        data = encode_image(image, self.max_side, rotate)
+        payload = {"model": self.model, "stream": False, "format": schema,
+                   "think": self.think if think is None else think,
+                   "options": {"temperature": temperature, "num_ctx": self.num_ctx,
+                               "num_predict": self.num_predict},
+                   "messages": [{"role": "user", "content": prompt,
+                                 "images": [base64.b64encode(data).decode()]}]}
+        reply = _post(self.base_url + "/api/chat", payload)["message"]["content"]
         if self.verbose:
             print(f"    {self.model} replied in {time.time() - t0:.0f}s")
         return extract_json(reply)
 
+    def _clock(self, image, degrees, think):
+        """(degrees of the face nearest 12 o'clock, True) if the model's clock
+        positions form a corner-view pattern (one face up, the others near 4 and 8)."""
+        try:
+            faces = self.chat(image, ORIENT_PROMPT, ORIENT_SCHEMA, rotate=degrees, think=think).get("faces", [])
+            clocks = [float(f["clock"]) % 12 for f in faces]
+        except (CubeReadError, ValueError, KeyError, TypeError):
+            return 0.0, False
+        if len(clocks) != 3:
+            return 0.0, False
+        top = min(clocks, key=lambda c: min(c, 12 - c))
+        others = sorted(((c - top) % 12) for c in clocks if c != top)
+        ok = len(others) == 2 and abs(others[0] - 4) <= 1.5 and abs(others[1] - 8) <= 1.5
+        return (top * 30) % 360, ok
+
+    def rotation(self, image):
+        """Degrees to rotate the photo (counter-clockwise) so one face sits at the top.
+
+        Asks the model for the clock position of each face centre and brings the
+        face nearest to 12 o'clock to the top. Only the clock numbers matter, so
+        colour mistakes in that answer are harmless. Tries without thinking first,
+        then with thinking if the answer is not a corner-view pattern, then one
+        refinement pass on the rotated image."""
+        if image in self.rotations:
+            return self.rotations[image]
+        degrees, ok = 0.0, False
+        for think in (False, True):
+            degrees, ok = self._clock(image, 0.0, think)
+            if ok:
+                break
+        if ok and min(degrees, 360 - degrees) > 15:
+            more, ok2 = self._clock(image, degrees, False)
+            if ok2:
+                degrees = (degrees + more) % 360
+        if not ok:
+            degrees = 0.0
+        if self.verbose:
+            print(f"    orientation: rotate {degrees:.0f} degrees")
+        self.rotations[image] = degrees
+        return degrees
+
     def read_view(self, image, feedback=None, temperature=0.0):
         """All three grids of one photo in one request."""
+        rot = self.rotation(image)
         view = self.chat(image, VIEW_PROMPT + (FEEDBACK.format(error=feedback) if feedback else ""),
-                         VIEW_SCHEMA, temperature)
+                         VIEW_SCHEMA, temperature, rotate=rot)
         return {g: view.get(g) for g in GRIDS}
 
-    def read_view_by_faces(self, image, temperature=0.0):
+    def read_view_by_faces(self, image, temperature=0.0, think=None):
         """One request per face; the model tracks a single grid at a time."""
-        return {g: self.chat(image, FACE_PROMPT.format(face=g.upper()), FACE_SCHEMA, temperature).get("grid")
-                for g in GRIDS}
+        rot = self.rotation(image)
+        return {g: self.chat(image, FACE_PROMPT.format(face=g.upper()), FACE_SCHEMA, temperature,
+                             rotate=rot, think=think).get("grid") for g in GRIDS}
 
 
 # ----------------------------------------------------------------------------
@@ -267,6 +311,9 @@ def view_faces(view, k=1):
         raise CubeReadError(f"photo {k}: the three centre stickers must be three different colours, "
                             f"got {[view[g][1][1] for g in GRIDS]}")
     (at, st), (al, sl), (ar, sr) = (faces[g] for g in GRIDS)
+    if len({at, al, ar}) < 3:
+        raise CubeReadError(f"photo {k}: {[view[g][1][1] for g in GRIDS]} cannot be the three centres of one "
+                            f"corner view, two of them are opposite faces; re-check the centre stickers")
     even = (at, al, ar) in {(0, 1, 2), (1, 2, 0), (2, 0, 1)}
     if even != (st * sl * sr == 1):
         raise CubeReadError(
@@ -449,14 +496,15 @@ def read_state(image_paths, reader, attempts=4, verbose=True):
         for k, path in enumerate(image_paths):
             if rnd == 1:
                 view = reader.read_view(path)
-            elif rnd == 2:
-                view = reader.read_view_by_faces(path)
+            elif rnd == 2:                          # fast extra votes: no thinking
+                view = reader.read_view_by_faces(path, think=False)
             else:
                 view = reader.read_view(path, feedback=error, temperature=0.7)
             pools[k].append(view)
         candidates = [("latest reading", [p[-1] for p in pools])]
         if rnd > 1:
             candidates.append(("majority vote", [vote(p) for p in pools]))
+        log["pools"] = pools
         for name, views in candidates:
             try:
                 state = state_from_views(views, verbose=verbose)
@@ -472,7 +520,10 @@ def read_state(image_paths, reader, attempts=4, verbose=True):
                 log["repairs"] = edits
                 log["rounds"].append({"round": rnd, "accepted": f"{name} + repair"})
                 return state, fixed, log
-    raise CubeReadError(f"no legal reading after {attempts} rounds; last error: {error}")
+    log["pools"] = pools
+    err = CubeReadError(f"no legal reading after {attempts} rounds; last error: {error}")
+    err.log = log
+    raise err
 
 
 # ----------------------------------------------------------------------------
@@ -495,20 +546,23 @@ def solve_state(state, optimal=False):
     return answer, RotationSequence(inverse(ans))
 
 
+class _Help(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    pass
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("images", nargs="*", help="corner-view photos, all six faces between them")
-    parser.add_argument("--base-url", default="http://192.168.1.254:11434",
-                        help="Ollama server, or an OpenAI-compatible endpoint ending in /v1 (vLLM)")
-    parser.add_argument("--model", default="qwen3.8:27b", help="model name on the server")
-    parser.add_argument("--backend", choices=["auto", "ollama", "openai"], default="auto")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=_Help)
+    parser.add_argument("images", nargs="*", default=[],
+                        help="corner-view photos, all six faces between them")
+    parser.add_argument("--base-url", default="http://192.168.1.254:11434", help="Ollama server")
+    parser.add_argument("--model", default="qwen3.8:27b", help="model name on the Ollama server")
     parser.add_argument("--no-think", action="store_true", help="disable thinking (faster, less accurate)")
-    parser.add_argument("--api-key", default=None)
     parser.add_argument("--attempts", type=int, default=4, help="reading rounds before giving up")
-    parser.add_argument("--save-json", help="write the accepted reading (and log) here")
-    parser.add_argument("--from-json", help="skip the model and use a saved reading")
-    parser.add_argument("--optimal", action="store_true", help="shortest answer (optimal.py) instead of Thistlethwaite")
-    parser.add_argument("--video", action="store_true", help="render answer.mp4 with visual2")
+    parser.add_argument("--save-json", default=None, help="write the accepted reading and log to this file")
+    parser.add_argument("--from-json", default=None, help="skip the model and use a saved reading")
+    parser.add_argument("--optimal", action="store_true",
+                        help="shortest answer (optimal.py) instead of Thistlethwaite")
+    parser.add_argument("--video", action="store_true", help="render answer.mp4 with visual.py")
     args = parser.parse_args()
 
     log = {}
@@ -524,13 +578,22 @@ def main():
                 raise SystemExit("could not repair the reading")
             log["repairs"] = edits
     elif args.images:
-        reader = Reader(args.base_url, args.model, args.backend, think=not args.no_think, api_key=args.api_key)
+        reader = Reader(args.base_url, args.model, think=not args.no_think)
         t0 = time.time()
-        state, views, log = read_state(args.images, reader, args.attempts)
+        try:
+            state, views, log = read_state(args.images, reader, args.attempts)
+        except CubeReadError as e:                    # keep every reading for debugging
+            if args.save_json and getattr(e, "log", None):
+                with open(args.save_json, "w") as fh:
+                    json.dump({"views": None, "log": e.log,
+                               "rotations": {p: reader.rotations.get(p, 0.0) for p in args.images}}, fh, indent=1)
+            raise SystemExit(f"failed: {e}")
         print(f"reading accepted after {reader.calls} model calls, {time.time() - t0:.0f}s")
     else:
         parser.error("give photo paths or --from-json")
     if args.save_json:
+        if args.images:
+            log["rotations"] = {p: reader.rotations.get(p, 0.0) for p in args.images}
         with open(args.save_json, "w") as fh:
             json.dump({"views": views, "log": log}, fh, indent=1)
 
@@ -539,7 +602,7 @@ def main():
     print(f"Scramble ({len(scramble)} moves): {scramble}")
     print("verified:", bool(np.all(answer(state) == index)))
     if args.video:
-        from visual2 import export_video
+        from visual import export_video
         export_video(coords[state], answer.seq, "answer.mp4")
         print("Exported answer.mp4")
 

@@ -21,15 +21,15 @@ IDA* solver, and 3D animation exporters built on matplotlib.
   half-turn metric.
 - **God's number bounds** – a script that bounds God's number for the r3
   move set by counting canonical sequences and by solving hard positions.
-- **Photos to moves** – `cube_vision.py` reads two corner-view photos with an
-  open-source vision-language model (Qwen on a local Ollama server), validates
-  and repairs the reading, and returns the solving and scrambling
-  `RotationSequence`s. See [COOKBOOK.md](COOKBOOK.md).
+- **Photos to moves** – `cube_vision.py` reads two corner-view photos, taken at
+  any angle, with an open-source vision-language model (Qwen on a local Ollama
+  server), validates and repairs the reading, and returns the solving and
+  scrambling `RotationSequence`s. `upload_server.py` does the same from a phone
+  browser. See [COOKBOOK.md](COOKBOOK.md).
 - **Brute-force solver** – a multiprocess, breadth-first search over all
   move sequences of increasing length, kept as a reference implementation.
-- **Video export** – render a scramble or a solution as an `.mp4`, either
-  with a fixed camera and smoothly turning slices (`visual2.py`) or with an
-  orbiting camera (`visual.py`).
+- **Video export** – render a scramble or a solution as an `.mp4` with a fixed
+  camera and smoothly turning slices (`visual.py`).
 
 ## Requirements
 
@@ -226,7 +226,6 @@ python solver.py
 python demo.py                    # 30 random moves, then solve and render
 python demo.py -n 50 --seed 7     # reproducible 50-move scramble
 python demo.py --no-video         # solve and verify only
-python demo.py --orbit            # orbiting-camera style from visual.py
 python demo.py -n 12 --optimal    # shortest possible answer
 ```
 
@@ -237,24 +236,18 @@ scramble):
 - `question.mp4` – the scramble applied to a solved cube.
 - `answer.mp4` – the solution applied to the scrambled cube.
 
-By default the videos come from `visual2.py`: the camera stays fixed, two
-views show opposite corners of the cube so every face is visible, and each
-move is animated as a smooth 90° slice turn followed by a short hold. Use
-`--frames-per-turn` to change the turn speed.
+The videos come from `visual.py`: the camera stays fixed, two views show
+opposite corners of the cube so every face is visible, and each move is
+animated as a smooth 90° slice turn followed by a short hold. Use
+`--frames-per-turn` to change the turn speed. Middle-slice rotations are
+shown the way r3 defines them, as the two outer slices turning the opposite
+way.
 
-With `--orbit` the videos come from `visual.py` instead: the cube snaps
-between states and the camera makes one full orbit per move, with a red arc
-indicating the slice and direction of the upcoming turn. Use
-`--angle-per-frame 6` for a smoother, slower orbit.
-
-Both renderers show r3 middle-slice rotations the way r3 defines them, as
-the two outer slices turning the opposite way.
-
-To render your own sequence with either renderer:
+To render your own sequence:
 
 ```python
 from r3 import coords, xpp, ynn, z0p
-from visual2 import export_video          # or: from visual import export_video
+from visual import export_video
 
 export_video(coords, (xpp, ynn, z0p), "my_sequence.mp4")
 ```
@@ -271,11 +264,11 @@ Face colors follow the standard scheme: `x+` blue, `x-` green, `y+` red,
 | `optimal.py`      | Optimal IDA* solver with pattern databases, `solve`             |
 | `gods_number.py`  | Bounds on God's number for the r3 move set                     |
 | `cube_vision.py`  | Two photos → cube state → `RotationSequence` via an open-source VLM |
+| `upload_server.py`| Phone-friendly upload page that runs the photo pipeline         |
 | `COOKBOOK.md`     | Walkthrough for the photo pipeline                              |
-| `examples/`       | Example photos and a hand-read `reading.json` fixture           |
+| `examples/`       | Example photos and hand-read `reading.json` / `reading2.json` fixtures |
 | `solver.py`       | `dfs` and the multiprocess `brute_force_multi` reference solver |
-| `visual2.py`      | Fixed-camera renderer with animated slice turns, `export_video` |
-| `visual.py`       | Orbiting-camera renderer, `export_video`                        |
+| `visual.py`       | Fixed-camera renderer with animated slice turns, `export_video` |
 | `demo.py`         | Scramble, solve, verify, and export both videos                 |
 | `requirements.txt`| Pinned Python dependencies                                     |
 

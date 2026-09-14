@@ -112,3 +112,6 @@ ENV/
 *.jpeg
 *.gif
 *.mp4
+
+# phone uploads (photos, readings, videos)
+uploads/

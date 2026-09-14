@@ -36,6 +36,12 @@ two, it returns one grid set), and its mistakes are **position slips within a
 grid**, not colour confusion, which is why thinking mode and per-face requests
 help and higher resolution does not.
 
+A second, harder pair of photos (`examples/scramble2_*.jpg`, ground truth in
+`examples/reading2.json`, one of them shot at a 45° tilt with the white face at
+the bottom) needed the full ladder: round 1 misread 3 stickers, the per-face round
+and one feedback re-read plus a single-sticker repair produced the correct state
+after 13 model calls. The recovered answer matched the ground-truth answer exactly.
+
 ## 1. Why this shape
 
 A vision-language-action model maps pixels to actions. For a cube, asking a model to
@@ -60,8 +66,7 @@ Together the pipeline behaves like a VLA: images in, actions out.
 
 The defaults point at the Ollama server on the DGX Spark and the model
 `qwen3.8:27b`. Ollama's native API is used because it exposes the `think` switch
-and constrained JSON output (`format` = JSON schema); an OpenAI-compatible
-endpoint (vLLM, or Ollama's `/v1`) is also supported with `--backend openai`.
+and constrained JSON output (`format` = JSON schema).
 
 ```bash
 ollama pull qwen3.8:27b
@@ -84,10 +89,16 @@ nearest the camera, in the middle of the picture.
 - **Photo 2:** camera at (−2, −2, −2) looking toward the origin. In practice you turn
   the cube over. Recommended: white on top, orange lower-left, green lower-right.
 
-The in-plane orientation does not matter: the code identifies each face from its
-centre sticker, and a handedness check rejects impossible (mirror-image) views. The
-hard requirements are that the two photos show complementary sets of faces and that
-all nine stickers of every face are visible. Diffuse light, no flash, and a plain
+The in-plane orientation does not matter at all: before reading, the pipeline asks
+the model for the clock position of each face's centre sticker (a cheap question
+without thinking) and rotates the photo so that one face sits at the top with the
+other two near 4 and 8 o'clock. Only the clock numbers are used, so a wrong colour
+in that answer is harmless; if the numbers do not form a corner-view pattern the
+question is repeated with thinking, and a refinement pass runs on the rotated
+image. The code then identifies each face from its centre sticker, and a
+handedness check rejects impossible (mirror-image) views. The hard requirements are
+that the two photos show complementary sets of faces and that all nine stickers of
+every face are visible. Diffuse light, no flash, and a plain
 background help; white stickers photograph grey, which the prompt anticipates.
 Images are downscaled to 1024 px on the long side before sending; that read better
 than 2048 px.
@@ -171,12 +182,14 @@ Every check raises `CubeReadError` with a sentence meant for the model:
 The last check is `thistlethwaite.solve` itself, which raises for any state outside
 the cube group.
 
-`read_state` escalates through rounds until a candidate passes:
+`read_state` escalates through rounds until a candidate passes (every read uses
+the rotation found by the orientation step):
 
-1. **Round 1:** one request per photo, thinking on. On the examples this is enough.
-2. **Round 2:** one request per face (three per photo), so the model tracks one grid.
-3. **Round 3+:** re-read each photo with the rejection sentence appended, at
-   temperature 0.7 for diversity.
+1. **Round 1:** one request per photo, thinking on. On easy photos this is enough.
+2. **Round 2:** one request per face (three per photo) without thinking: fast extra
+   votes, and the model tracks one grid at a time.
+3. **Round 3+:** re-read each photo with the rejection sentence appended, thinking
+   on, at temperature 0.7 for diversity.
 
 After each round two candidates are tried: the latest reading, and from round 2 on
 the per-sticker **majority vote** over every reading so far. When a candidate is
@@ -210,14 +223,32 @@ answer, scramble = solve_state(state)              # or optimal=True
   photos show, so `scramble(index)` equals `state`.
 - `optimal=True` gives the shortest answer in r3 rotations; see the README for its
   running time.
-- To watch the answer, `visual2.export_video(coords[state], answer.seq, "answer.mp4")`.
+- To watch the answer, `visual.export_video(coords[state], answer.seq, "answer.mp4")`.
 
-## 8. Running it
+## 8. From the phone
 
-Offline check without a model, using the two example photos read by hand:
+`upload_server.py` is a one-file web page (standard library only) that runs the
+whole pipeline on wayne-kv:
+
+```bash
+python upload_server.py            # http://0.0.0.0:8080
+```
+
+On the phone, open `http://<wayne-kv address>:8080`, pick or shoot the two photos,
+tap **Upload and solve**. The photos land in `uploads/<timestamp>/`, the page
+refreshes every few seconds while the model reads, then shows the answer and
+scramble sequences and plays `answer.mp4` inline. wayne-kv is reachable from an
+iPhone with NordVPN Meshnet at its meshnet address (`nordlynx` interface,
+`100.83.197.164` at the time of writing) or on the LAN at `192.168.1.20`.
+
+## 9. Running it from the shell
+
+Offline check without a model, using the example photos read by hand
+(`reading.json` for the first pair, `reading2.json` for the tilted second pair):
 
 ```bash
 python cube_vision.py --from-json examples/reading.json --video
+python cube_vision.py --from-json examples/reading2.json
 ```
 
 With the model on the DGX Spark (defaults: `http://192.168.1.254:11434`,
@@ -236,8 +267,6 @@ Expected output on the examples: round 1 accepted after two model calls in about
   examples it converged in round 4 after 12 calls (58 s) with one sticker repaired,
   and produced the same answer as the thinking run.
 - `--model qwen2.5vl:72b` (or any model on the server) for a second opinion.
-- `--backend openai --base-url http://<host>:8000/v1 --model Qwen/Qwen3-VL-8B-Instruct`
-  for a vLLM server; thinking is then controlled by the server.
 - `--optimal` for the shortest answer, `--attempts N` for more rounds.
 
 Troubleshooting:
@@ -250,6 +279,5 @@ Troubleshooting:
 - **Impossible piece / physically impossible state that never resolves:** the model
   keeps slipping the same row. Crop the photo so the cube fills the frame, or try
   the 72B model; the majority vote across rounds usually settles it.
-- **Empty or truncated replies on an OpenAI-compatible endpoint:** a thinking model
-  spent the token budget on reasoning; raise `num_predict` in `Reader` or use the
-  Ollama backend, which separates thinking from the answer.
+- **Empty or truncated replies:** the thinking budget ran out; raise `num_predict`
+  in `Reader` (default 16000).
