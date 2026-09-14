@@ -38,9 +38,15 @@ help and higher resolution does not.
 
 A second, harder pair of photos (`examples/scramble2_*.jpg`, ground truth in
 `examples/reading2.json`, one of them shot at a 45° tilt with the white face at
-the bottom) needed the full ladder: round 1 misread 3 stickers, the per-face round
-and one feedback re-read plus a single-sticker repair produced the correct state
-after 13 model calls. The recovered answer matched the ground-truth answer exactly.
+the bottom) showed a different failure mode: the round-1 read of the upright
+photo is wrong on exactly the same two stickers every time (the two white
+stickers of the red face next to the centre edge, read as green and red), while
+the tilted photo reads 27/27 after its automatic 315° rotation. Errors that are
+systematic cannot be voted away, so the repair step now also tries two-sticker
+fixes; on this pair the two-sticker fix is unique and correct, so the state is
+accepted in round 1. Cropping the photo to the cube first (the model finds the
+bounding box in 3 s; `--crop`) did not reduce the errors on these photos and
+changed which stickers fail, so it is off by default.
 
 ## 1. Why this shape
 
@@ -183,7 +189,9 @@ The last check is `thistlethwaite.solve` itself, which raises for any state outs
 the cube group.
 
 `read_state` escalates through rounds until a candidate passes (every read uses
-the rotation found by the orientation step):
+the crop and rotation found by the preparation steps, and every call carries a
+fixed seed so identical inputs give identical outputs; round 3+ uses a different
+seed per round for diversity):
 
 1. **Round 1:** one request per photo, thinking on. On easy photos this is enough.
 2. **Round 2:** one request per face (three per photo) without thinking: fast extra
@@ -195,8 +203,10 @@ After each round two candidates are tried: the latest reading, and from round 2 
 the per-sticker **majority vote** over every reading so far. When a candidate is
 rejected, `repair` looks for the smallest edit that makes it legal:
 
-- **One sticker:** if colour counts are off by one, move an over-represented sticker
-  to an under-represented colour, trying colours other readings proposed first.
+- **One or two stickers:** if the colour counts are off by at most two, enumerate
+  every way of recolouring that many over-represented stickers to under-represented
+  colours (a few hundred candidates at most, each checked for legality in about a
+  millisecond).
 - **One piece:** if counts are fine but the state is impossible, flip an edge or
   twist a corner in place. Legality alone cannot choose the piece (flipping *any*
   other edge also restores parity), so only pieces the readings disagree on are
@@ -266,6 +276,10 @@ Expected output on the examples: round 1 accepted after two model calls in about
 - `--no-think`: each call is ten times faster, but expect several rounds. On the
   examples it converged in round 4 after 12 calls (58 s) with one sticker repaired,
   and produced the same answer as the thinking run.
+- `--seed N`: change the seed sent to the model; the same seed and photos reproduce
+  the same run.
+- Never run several pipelines against the same Ollama server at once: requests are
+  served one at a time per model, so parallel runs only queue up and heat the GPU.
 - `--model qwen2.5vl:72b` (or any model on the server) for a second opinion.
 - `--optimal` for the shortest answer, `--attempts N` for more rounds.
 

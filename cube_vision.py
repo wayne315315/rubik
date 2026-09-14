@@ -46,6 +46,7 @@ Usage::
 import argparse
 import base64
 import io
+import itertools
 import json
 import re
 import time
@@ -145,6 +146,14 @@ Report ONLY the {face} face of this photo, as a JSON object {{"grid": [[...],[..
 using the {face}[i][j] indexing defined above. Use the other two faces only to orient
 yourself."""
 
+BBOX_PROMPT = """Locate the Rubik's cube in this photo. Output ONLY JSON {"bbox": [x1, y1, x2, y2]}
+with coordinates normalised to 0-1000 of the image width and height (x1, y1 = top-left,
+x2, y2 = bottom-right), tightly enclosing the whole cube."""
+
+BBOX_SCHEMA = {"type": "object", "properties": {"bbox": {"type": "array", "minItems": 4, "maxItems": 4,
+                                                          "items": {"type": "number"}}},
+               "required": ["bbox"], "additionalProperties": False}
+
 ORIENT_PROMPT = """This photo shows three faces of a 3x3x3 Rubik's cube meeting at the corner closest
 to the camera, near the centre of the image. The photo may be rotated at any angle.
 
@@ -172,10 +181,14 @@ Look at the photo again, sticker by sticker, and output the corrected JSON."""
 # ----------------------------------------------------------------------------
 # Talking to the model
 # ----------------------------------------------------------------------------
-def encode_image(path, max_side=1024, rotate=0.0):
-    """Downscale to max_side px (1024 read best in tests), optionally rotating the
-    image counter-clockwise by `rotate` degrees first, and return JPEG bytes."""
+def encode_image(path, max_side=1024, rotate=0.0, crop=None):
+    """Downscale to max_side px (1024 read best in tests), optionally cropping to a
+    box (fractions of width/height) and rotating counter-clockwise by `rotate`
+    degrees first, and return JPEG bytes."""
     img = Image.open(path).convert("RGB")
+    if crop:
+        w, h = img.size
+        img = img.crop((int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h)))
     if rotate % 360:
         img = img.rotate(rotate, resample=Image.BICUBIC, expand=True, fillcolor=(96, 96, 96))
     scale = max_side / max(img.size)
@@ -209,22 +222,25 @@ class Reader:
     """One model behind Ollama's native API (/api/chat), with thinking and JSON schema."""
 
     def __init__(self, base_url="http://192.168.1.254:11434", model="qwen3.8:27b", think=True,
-                 max_side=1024, num_ctx=16384, num_predict=16000, verbose=True):
+                 max_side=1024, num_ctx=16384, num_predict=16000, crop=False, seed=1, verbose=True):
         self.base_url = base_url.rstrip("/")
         self.model, self.think = model, think
         self.max_side, self.num_ctx, self.num_predict, self.verbose = max_side, num_ctx, num_predict, verbose
+        self.crop, self.seed = crop, seed          # seed makes every call reproducible
         self.calls = 0
         self.rotations = {}                       # image path -> degrees applied before reading
+        self.crops = {}                           # image path -> crop box (fractions) or None
 
-    def chat(self, image, prompt, schema, temperature=0.0, rotate=0.0, think=None):
+    def chat(self, image, prompt, schema, temperature=0.0, rotate=0.0, think=None, crop=None, seed=None):
         """Send one image + prompt, return the parsed JSON object."""
         self.calls += 1
         t0 = time.time()
-        data = encode_image(image, self.max_side, rotate)
+        data = encode_image(image, self.max_side, rotate, crop)
         payload = {"model": self.model, "stream": False, "format": schema,
                    "think": self.think if think is None else think,
                    "options": {"temperature": temperature, "num_ctx": self.num_ctx,
-                               "num_predict": self.num_predict},
+                               "num_predict": self.num_predict,
+                               "seed": self.seed if seed is None else seed},
                    "messages": [{"role": "user", "content": prompt,
                                  "images": [base64.b64encode(data).decode()]}]}
         reply = _post(self.base_url + "/api/chat", payload)["message"]["content"]
@@ -232,11 +248,29 @@ class Reader:
             print(f"    {self.model} replied in {time.time() - t0:.0f}s")
         return extract_json(reply)
 
+    def box(self, image):
+        """Crop box (fractions) around the cube with an 8 % margin, from the model's
+        bounding box, so the cube fills the frame; None if disabled or not found."""
+        if image in self.crops:
+            return self.crops[image]
+        box = None
+        if self.crop:
+            try:
+                x1, y1, x2, y2 = [float(v) / 1000 for v in self.chat(image, BBOX_PROMPT, BBOX_SCHEMA, think=False)["bbox"]]
+                mx, my = (x2 - x1) * 0.08, (y2 - y1) * 0.08
+                if 0.05 < x2 - x1 <= 1 and 0.05 < y2 - y1 <= 1:
+                    box = (max(0.0, x1 - mx), max(0.0, y1 - my), min(1.0, x2 + mx), min(1.0, y2 + my))
+            except (CubeReadError, KeyError, TypeError, ValueError):
+                box = None
+        self.crops[image] = box
+        return box
+
     def _clock(self, image, degrees, think):
         """(degrees of the face nearest 12 o'clock, True) if the model's clock
         positions form a corner-view pattern (one face up, the others near 4 and 8)."""
         try:
-            faces = self.chat(image, ORIENT_PROMPT, ORIENT_SCHEMA, rotate=degrees, think=think).get("faces", [])
+            faces = self.chat(image, ORIENT_PROMPT, ORIENT_SCHEMA, rotate=degrees, think=think,
+                              crop=self.box(image)).get("faces", [])
             clocks = [float(f["clock"]) % 12 for f in faces]
         except (CubeReadError, ValueError, KeyError, TypeError):
             return 0.0, False
@@ -273,18 +307,18 @@ class Reader:
         self.rotations[image] = degrees
         return degrees
 
-    def read_view(self, image, feedback=None, temperature=0.0):
+    def read_view(self, image, feedback=None, temperature=0.0, seed=None):
         """All three grids of one photo in one request."""
-        rot = self.rotation(image)
+        rot, box = self.rotation(image), self.box(image)
         view = self.chat(image, VIEW_PROMPT + (FEEDBACK.format(error=feedback) if feedback else ""),
-                         VIEW_SCHEMA, temperature, rotate=rot)
+                         VIEW_SCHEMA, temperature, rotate=rot, crop=box, seed=seed)
         return {g: view.get(g) for g in GRIDS}
 
-    def read_view_by_faces(self, image, temperature=0.0, think=None):
+    def read_view_by_faces(self, image, temperature=0.0, think=None, seed=None):
         """One request per face; the model tracks a single grid at a time."""
-        rot = self.rotation(image)
+        rot, box = self.rotation(image), self.box(image)
         return {g: self.chat(image, FACE_PROMPT.format(face=g.upper()), FACE_SCHEMA, temperature,
-                             rotate=rot, think=think).get("grid") for g in GRIDS}
+                             rotate=rot, crop=box, think=think, seed=seed).get("grid") for g in GRIDS}
 
 
 # ----------------------------------------------------------------------------
@@ -396,10 +430,11 @@ def state_from_views(views, verbose=False):
 # Robustness: majority vote over readings, and bounded legality-guided repair
 # ----------------------------------------------------------------------------
 def vote(pool):
-    """Per-sticker majority over several readings of one photo (ties -> latest)."""
+    """Per-sticker majority over several readings of one photo (ties -> earliest,
+    because round 1 reads with thinking and is the most reliable)."""
     out = {}
     for g in GRIDS:
-        out[g] = [[Counter(v[g][i][j] for v in reversed(pool)).most_common(1)[0][0]
+        out[g] = [[Counter(v[g][i][j] for v in pool).most_common(1)[0][0]
                    for j in range(3)] for i in range(3)]
     return out
 
@@ -430,26 +465,34 @@ def repair(views, pools=None, verbose=True):
     counts = Counter(v[g][i][j] for v in views for (g, i, j) in CELLS)
     over = [c for c in COLORS if counts[c] > 9]
     under = [c for c in COLORS if counts[c] < 9]
-    if over and under:
+    excess = sum(counts[c] - 9 for c in over)
+    if over and under and excess <= 2:
+        # every way of recolouring `excess` over-represented stickers to
+        # under-represented colours so that all counts become 9
+        moves = [(k, cell) for k, v in enumerate(views) for cell in CELLS
+                 if v[cell[0]][cell[1]][cell[2]] in over and cell[1:] != (1, 1)]
         found = []
-        for k, v in enumerate(views):
-            for cell in CELLS:
-                g, i, j = cell
-                if v[g][i][j] not in over or (i, j) == (1, 1):
+        for combo in itertools.combinations(moves, excess):
+            colors_out = Counter(views[k][g][i][j] for k, (g, i, j) in combo)
+            if any(counts[c] - colors_out[c] != 9 for c in over):
+                continue
+            for colors_in in itertools.product(under, repeat=excess):
+                if any(counts[c] + colors_in.count(c) != 9 for c in under):
                     continue
-                seen = {p[g][i][j] for p in (pools[k] if pools else [])}
-                for color in sorted(under, key=lambda c: c not in seen):
-                    cand = _with(views, k, cell, color)
-                    if _legal(cand) is not None:
-                        found.append((k, cell, v[g][i][j], color, cand))
+                cand = views
+                for (k, cell), color in zip(combo, colors_in):
+                    cand = _with(cand, k, cell, color)
+                if _legal(cand) is not None:
+                    found.append((combo, colors_in, cand))
         if len(found) == 1:
-            k, (g, i, j), old, new, cand = found[0]
-            edit = f"photo {k + 1} {g}[{i}][{j}]: {old} -> {new}"
+            combo, colors_in, cand = found[0]
+            edits = [f"photo {k + 1} {g}[{i}][{j}]: {views[k][g][i][j]} -> {c}"
+                     for (k, (g, i, j)), c in zip(combo, colors_in)]
             if verbose:
-                print(f"  repaired one sticker ({edit}); please confirm against the photo")
-            return _legal(cand), cand, [edit]
+                print(f"  repaired {excess} sticker(s) ({'; '.join(edits)}); please confirm against the photo")
+            return _legal(cand), cand, edits
         if verbose and found:
-            print(f"  {len(found)} different single-sticker fixes would be legal; not guessing")
+            print(f"  {len(found)} different {excess}-sticker fixes would be legal; not guessing")
         return None, views, []
     if not over and not under and pools:
         # Every colour 9 times but illegal: flip/twist one piece in place. Legality
@@ -498,8 +541,8 @@ def read_state(image_paths, reader, attempts=4, verbose=True):
                 view = reader.read_view(path)
             elif rnd == 2:                          # fast extra votes: no thinking
                 view = reader.read_view_by_faces(path, think=False)
-            else:
-                view = reader.read_view(path, feedback=error, temperature=0.7)
+            else:                                   # diverse but reproducible re-reads
+                view = reader.read_view(path, feedback=error, temperature=0.7, seed=reader.seed + rnd)
             pools[k].append(view)
         candidates = [("latest reading", [p[-1] for p in pools])]
         if rnd > 1:
@@ -557,7 +600,10 @@ def main():
     parser.add_argument("--base-url", default="http://192.168.1.254:11434", help="Ollama server")
     parser.add_argument("--model", default="qwen3.8:27b", help="model name on the Ollama server")
     parser.add_argument("--no-think", action="store_true", help="disable thinking (faster, less accurate)")
-    parser.add_argument("--attempts", type=int, default=4, help="reading rounds before giving up")
+    parser.add_argument("--crop", action="store_true",
+                        help="crop the photo to the cube (model bounding box) before reading; useful when the cube is small in the frame")
+    parser.add_argument("--seed", type=int, default=1, help="random seed sent to the model for reproducible runs")
+    parser.add_argument("--attempts", type=int, default=5, help="reading rounds before giving up")
     parser.add_argument("--save-json", default=None, help="write the accepted reading and log to this file")
     parser.add_argument("--from-json", default=None, help="skip the model and use a saved reading")
     parser.add_argument("--optimal", action="store_true",
@@ -578,7 +624,7 @@ def main():
                 raise SystemExit("could not repair the reading")
             log["repairs"] = edits
     elif args.images:
-        reader = Reader(args.base_url, args.model, think=not args.no_think)
+        reader = Reader(args.base_url, args.model, think=not args.no_think, crop=args.crop, seed=args.seed)
         t0 = time.time()
         try:
             state, views, log = read_state(args.images, reader, args.attempts)
@@ -594,6 +640,7 @@ def main():
     if args.save_json:
         if args.images:
             log["rotations"] = {p: reader.rotations.get(p, 0.0) for p in args.images}
+            log["crops"] = {p: reader.crops.get(p) for p in args.images}
         with open(args.save_json, "w") as fh:
             json.dump({"views": views, "log": log}, fh, indent=1)
 
