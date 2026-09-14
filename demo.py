@@ -4,11 +4,9 @@ the scramble and the solution as videos.
     python demo.py                    # 30 random moves, question.mp4 + answer.mp4
     python demo.py -n 50 --seed 7     # reproducible 50-move scramble
     python demo.py --no-video         # just solve and verify
-    python demo.py --orbit            # old visual.py style (camera orbits, cube snaps)
     python demo.py -n 12 --optimal    # shortest possible answer (slow for long scrambles)
 
-The default renderer is visual2.py: fixed camera, each move animated as a
-smooth slice turn.
+The renderer is visual.py: fixed camera, each move animated as a smooth slice turn.
 """
 import argparse
 import random
@@ -20,23 +18,19 @@ from r3 import coords, index, rs, RotationSequence
 import thistlethwaite
 import optimal
 import visual
-import visual2
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-n", "--scramble", type=int, default=30, help="number of random rotations (default 30)")
+    class Help(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+        pass
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=Help)
+    parser.add_argument("-n", "--scramble", type=int, default=30, help="number of random rotations")
     parser.add_argument("--seed", type=int, default=None, help="random seed for a reproducible scramble")
     parser.add_argument("--no-video", action="store_true", help="skip rendering the mp4 files")
     parser.add_argument("--optimal", action="store_true",
                         help="use the optimal solver (guaranteed shortest, exponential time)")
-    parser.add_argument("--orbit", action="store_true",
-                        help="use visual.py (orbiting camera) instead of visual2.py (slice turns)")
-    parser.add_argument("--frames-per-turn", type=int, default=18,
-                        help="visual2: frames per 90-degree turn (default 18)")
-    parser.add_argument("--angle-per-frame", type=int, default=12,
-                        help="visual: camera degrees per frame; larger renders faster (default 12)")
-    parser.add_argument("--fps", type=int, default=None, help="video frame rate (default 24, or 12 with --orbit)")
+    parser.add_argument("--frames-per-turn", type=int, default=18, help="frames per 90-degree turn")
+    parser.add_argument("--fps", type=int, default=24, help="video frame rate")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -63,15 +57,10 @@ def main():
 
     if args.no_video:
         return
-    if args.orbit:
-        export_video = visual.export_video
-        kwargs = dict(angle_per_frame=args.angle_per_frame, fps=args.fps or 12)
-    else:
-        export_video = visual2.export_video
-        kwargs = dict(frames_per_turn=args.frames_per_turn, fps=args.fps or 24)
+    kwargs = dict(frames_per_turn=args.frames_per_turn, fps=args.fps)
     t0 = time.time()
-    export_video(coords, question.seq, "question.mp4", **kwargs)
-    export_video(coords_q, answer.seq, "answer.mp4", **kwargs)
+    visual.export_video(coords, question.seq, "question.mp4", **kwargs)
+    visual.export_video(coords_q, answer.seq, "answer.mp4", **kwargs)
     print(f"Exported question.mp4 and answer.mp4 in {time.time() - t0:.0f}s")
 
 
