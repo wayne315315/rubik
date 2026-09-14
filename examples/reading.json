@@ -1,0 +1,14 @@
+{
+ "views": [
+  {
+   "top": [["yellow", "green", "orange"], ["blue", "yellow", "yellow"], ["green", "yellow", "red"]],
+   "lower_left": [["yellow", "orange", "green"], ["blue", "blue", "blue"], ["blue", "blue", "blue"]],
+   "lower_right": [["yellow", "red", "blue"], ["red", "red", "red"], ["red", "red", "red"]]
+  },
+  {
+   "top": [["yellow", "yellow", "blue"], ["green", "green", "green"], ["green", "green", "green"]],
+   "lower_left": [["white", "white", "white"], ["white", "white", "white"], ["white", "white", "white"]],
+   "lower_right": [["orange", "orange", "red"], ["orange", "orange", "yellow"], ["orange", "orange", "orange"]]
+  }
+ ]
+}

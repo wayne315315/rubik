@@ -21,6 +21,10 @@ IDA* solver, and 3D animation exporters built on matplotlib.
   half-turn metric.
 - **God's number bounds** – a script that bounds God's number for the r3
   move set by counting canonical sequences and by solving hard positions.
+- **Photos to moves** – `cube_vision.py` reads two corner-view photos with an
+  open-source vision-language model (Qwen on a local Ollama server), validates
+  and repairs the reading, and returns the solving and scrambling
+  `RotationSequence`s. See [COOKBOOK.md](COOKBOOK.md).
 - **Brute-force solver** – a multiprocess, breadth-first search over all
   move sequences of increasing length, kept as a reference implementation.
 - **Video export** – render a scramble or a solution as an `.mp4`, either
@@ -266,6 +270,9 @@ Face colors follow the standard scheme: `x+` blue, `x-` green, `y+` red,
 | `thistlethwaite.py` | Fast four-phase solver, `solve`                              |
 | `optimal.py`      | Optimal IDA* solver with pattern databases, `solve`             |
 | `gods_number.py`  | Bounds on God's number for the r3 move set                     |
+| `cube_vision.py`  | Two photos → cube state → `RotationSequence` via an open-source VLM |
+| `COOKBOOK.md`     | Walkthrough for the photo pipeline                              |
+| `examples/`       | Example photos and a hand-read `reading.json` fixture           |
 | `solver.py`       | `dfs` and the multiprocess `brute_force_multi` reference solver |
 | `visual2.py`      | Fixed-camera renderer with animated slice turns, `export_video` |
 | `visual.py`       | Orbiting-camera renderer, `export_video`                        |
