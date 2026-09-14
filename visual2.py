@@ -68,8 +68,9 @@ def slot_colors(state):
 
 
 def rotation_matrix(axis, theta):
+    """Right-hand rotation by theta about +axis (cyclic order x->y->z->x)."""
     c, s = np.cos(theta), np.sin(theta)
-    i, j = [k for k in range(3) if k != axis]
+    i, j = (axis + 1) % 3, (axis + 2) % 3
     m = np.eye(3)
     m[i, i], m[i, j], m[j, i], m[j, j] = c, -s, s, c
     return m
