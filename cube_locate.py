@@ -88,8 +88,8 @@ def snap(arr, cx, cy, size):
     h, w = arr.shape[:2]
     r = max(2, int(size * 0.18))
     best, best_score = (cx, cy), None
-    for dy in np.linspace(-0.25, 0.25, 7) * size:
-        for dx in np.linspace(-0.25, 0.25, 7) * size:
+    for dy in np.linspace(-0.35, 0.35, 9) * size:
+        for dx in np.linspace(-0.35, 0.35, 9) * size:
             x, y = cx + dx, cy + dy
             x0, x1 = int(max(0, x - r)), int(min(w, x + r + 1))
             y0, y1 = int(max(0, y - r)), int(min(h, y + r + 1))
@@ -106,6 +106,33 @@ def snap(arr, cx, cy, size):
 # ----------------------------------------------------------------------------
 # 2. lattice ordering of nine points
 # ----------------------------------------------------------------------------
+def _assign(ab, tol):
+    """cell -> (point index, residual) for lattice coords ab (n,2) within tol of an
+    integer cell in {-1,0,1}^2; one point per cell (the best-fitting one)."""
+    rounded = np.round(ab)
+    ok = (np.abs(ab - rounded).max(1) <= tol) & (np.abs(rounded).max(1) <= 1)
+    chosen = {}
+    for k in np.flatnonzero(ok):
+        cell = (int(rounded[k][0]), int(rounded[k][1]))
+        r = np.abs(ab[k] - rounded[k]).max()
+        if cell not in chosen or r < chosen[cell][1]:
+            chosen[cell] = (k, r)
+    return chosen
+
+
+def _refit(pts, chosen):
+    """Least-squares affine model (rows u, v, origin) from cell -> point pairs."""
+    cells = sorted(chosen)
+    if len(cells) < 4:
+        return None
+    grid = np.array(cells, dtype=float)
+    A = np.hstack([grid, np.ones((len(cells), 1))])
+    coef, *_ = np.linalg.lstsq(A, pts[[chosen[c][0] for c in cells]], rcond=None)
+    if abs(np.linalg.det(np.stack([coef[0], coef[1]], 1))) < 1e-6:
+        return None
+    return coef
+
+
 def lattice(points, max_resid=0.35, allow_missing=0):
     """Fit a 3x3 lattice to N points. Returns (pts9, used, leftover): pts9 is a (9, 2)
     array ordered by cell (row-major, cell k = (k // 3, k % 3)), used maps cell index
@@ -134,21 +161,23 @@ def lattice(points, max_resid=0.35, allow_missing=0):
                 if abs(np.linalg.det(basis)) < 1e-6:
                     continue
                 ab = rel @ np.linalg.inv(basis).T
-                rounded = np.round(ab)
-                ok = (np.abs(ab - rounded).max(1) <= 0.45) & (np.abs(rounded).max(1) <= 1)
-                chosen = {}
-                for k in np.flatnonzero(ok):                       # one point per cell, best residual
-                    cell = (int(rounded[k][0]), int(rounded[k][1]))
-                    r = np.abs(ab[k] - rounded[k]).max()
-                    if cell not in chosen or r < chosen[cell][1]:
-                        chosen[cell] = (k, r)
+                # two-stage fit: assign the points that clearly fit the raw basis,
+                # refit an affine model on them, then re-assign every point with it
+                chosen = _assign(ab, 0.45)
+                if len(chosen) < 5:
+                    continue
+                coef = _refit(pts, chosen)
+                if coef is None:
+                    continue
+                ab2 = (pts - coef[2]) @ np.linalg.inv(np.stack([coef[0], coef[1]], 1)).T
+                chosen = _assign(ab2, 0.5)
                 if len(full - set(chosen)) > allow_missing:
                     continue
+                coef = _refit(pts, chosen)
                 cells = sorted(chosen)
                 sel = np.array([chosen[c][0] for c in cells])
                 grid = np.array(cells, dtype=float)
                 A = np.hstack([grid, np.ones((len(cells), 1))])
-                coef, *_ = np.linalg.lstsq(A, pts[sel], rcond=None)
                 spacing = min(np.linalg.norm(coef[0]), np.linalg.norm(coef[1]))
                 resid = np.linalg.norm(A @ coef - pts[sel], axis=1).max() / spacing
                 score = resid + 0.1 * (9 - len(cells))             # prefer complete faces
