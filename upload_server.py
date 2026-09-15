@@ -50,8 +50,11 @@ def run_job(job_id, folder):
            "--save-json", os.path.join(folder, "reading.json"), "--video"] + EXTRA_ARGS
     env = dict(os.environ, MPLBACKEND="Agg")
     proc = subprocess.Popen(cmd, cwd=folder, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    for line in proc.stdout:
-        job["log"] += line
+    with open(os.path.join(folder, "log.txt"), "w") as fh:          # keep the log on disk too
+        for line in proc.stdout:
+            job["log"] += line
+            fh.write(line)
+            fh.flush()
     proc.wait()
     job["status"] = "done" if proc.returncode == 0 else "failed"
     for line in job["log"].splitlines():
