@@ -124,7 +124,10 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--optimal", action="store_true", help="pass --optimal to cube_vision")
     parser.add_argument("--model", default=None, help="model name to pass to cube_vision")
+    parser.add_argument("--detector", choices=["vlm", "cnn"], default="cnn",
+                        help="round-0 sticker localisation passed to cube_vision (default: local CNN)")
     args = parser.parse_args()
+    EXTRA_ARGS.extend(["--detector", args.detector])
     if args.optimal:
         EXTRA_ARGS.append("--optimal")
     if args.model:

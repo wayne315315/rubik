@@ -318,10 +318,17 @@ def assign_faces(face_points):
 # 4. colour measurement and balanced classification
 # ----------------------------------------------------------------------------
 def patch_color(arr, x, y, r):
+    """Median colour of the sticker around (x, y): a patch of radius r with the
+    dark pixels (black border, gaps) removed, so an off-centre point or a logo
+    covering part of the sticker does not shift the result."""
     h, w = arr.shape[:2]
     x0, x1 = max(0, int(x - r)), min(w, int(x + r) + 1)
     y0, y1 = max(0, int(y - r)), min(h, int(y + r) + 1)
-    return np.median(arr[y0:y1, x0:x1].reshape(-1, 3), 0) / 255.0
+    px = arr[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32) / 255.0
+    bright = px[px.max(1) > 0.28]
+    if len(bright) < 0.2 * len(px):
+        bright = px
+    return np.median(bright, 0)
 
 
 def features(rgb):
@@ -410,7 +417,7 @@ def measure(arr, groups):
         d = np.sort(np.linalg.norm(pts[:, None] - pts[None], axis=2), 1)[:, 1].min()
         for k, ij in cell_of.items():
             cells.append((name, ij[0], ij[1]))
-            samples.append(patch_color(arr, pts[k][0], pts[k][1], max(2, d * 0.22)))
+            samples.append(patch_color(arr, pts[k][0], pts[k][1], max(2, d * 0.30)))
     return cells, np.asarray(samples)
 
 
