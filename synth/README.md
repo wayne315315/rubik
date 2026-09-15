@@ -97,6 +97,23 @@ Only `torch` (CPU wheel) on top of the main requirements, installed into `.venv`
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
+## Failures seen on real uploads and what closed them
+
+- **Snap wandered off the cube** (upload 20260915-184346, white laptop behind
+  the cube): the "most uniform patch" refinement preferred the flat white
+  laptop to the blue sticker at the top vertex. `snap()` now only accepts
+  candidate positions whose colour matches the colour under the raw point.
+- **Brightness dominated red vs orange** (same upload, hard shadows): bright
+  reds on the lit top face sat closer to the orange centre than to the dark
+  reds in shadow. Brightness now enters the colour feature with weight 0.25
+  (enough to separate white), hue and saturation decide the rest.
+- The greedy balanced assignment could cross-assign two close colours; it is
+  now an exact Hungarian assignment over 9 slots per colour (3 ms), and when
+  the labels still do not form a legal cube the cheapest label swaps are tried
+  until one does (`label_views`).
+- `python -m synth.regress` runs all real pairs in `examples/` through the CNN
+  path and compares with their reference states; run it after any change.
+
 ## What could still go wrong
 
 - A sticker completely missed by the network: one missing sticker per face is

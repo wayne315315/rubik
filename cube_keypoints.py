@@ -75,14 +75,4 @@ def measure_photo(path, max_side=1024, ckpt=DEFAULT_CKPT):
 
 def read_photos(paths, max_side=1024, ckpt=DEFAULT_CKPT):
     """Two photos -> list of view dicts, CNN localisation + pixel colours."""
-    per_photo = [measure_photo(p, max_side, ckpt) for p in paths]
-    all_samples = np.concatenate([s for _, s in per_photo])
-    labels = cube_locate.classify(all_samples, per_color=9 if len(all_samples) == 54 else len(all_samples))
-    views, k = [], 0
-    for cells, samples in per_photo:
-        view = {g: [[None] * 3 for _ in range(3)] for g in cube_locate.GRIDS}
-        for (g, i, j) in cells:
-            view[g][i][j] = labels[k]
-            k += 1
-        views.append(view)
-    return views
+    return cube_locate.label_views([measure_photo(p, max_side, ckpt) for p in paths])

@@ -505,7 +505,10 @@ def repair(views, pools=None, verbose=True):
         # alone cannot pick the piece (flipping any other edge also restores parity),
         # so only pieces whose stickers the readings disagree on are candidates.
         found = []
-        pos = [(k, view_positions(view_faces(v, k + 1))) for k, v in enumerate(views)]
+        try:
+            pos = [(k, view_positions(view_faces(v, k + 1))) for k, v in enumerate(views)]
+        except CubeReadError:                       # centres themselves are wrong: nothing to rotate
+            return None, views, []
         cell_of = {f: (k, cell) for k, p in pos for cell, f in p.items()}
         for block, stickers in b2i.items():
             if len(stickers) == 1:

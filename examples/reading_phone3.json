@@ -1,0 +1,239 @@
+{
+ "views": [
+  {
+   "top": [
+    [
+     "white",
+     "green",
+     "orange"
+    ],
+    [
+     "red",
+     "white",
+     "orange"
+    ],
+    [
+     "yellow",
+     "red",
+     "red"
+    ]
+   ],
+   "lower_left": [
+    [
+     "green",
+     "yellow",
+     "white"
+    ],
+    [
+     "red",
+     "orange",
+     "blue"
+    ],
+    [
+     "blue",
+     "orange",
+     "green"
+    ]
+   ],
+   "lower_right": [
+    [
+     "green",
+     "blue",
+     "yellow"
+    ],
+    [
+     "white",
+     "green",
+     "orange"
+    ],
+    [
+     "orange",
+     "blue",
+     "blue"
+    ]
+   ]
+  },
+  {
+   "top": [
+    [
+     "white",
+     "yellow",
+     "yellow"
+    ],
+    [
+     "green",
+     "yellow",
+     "red"
+    ],
+    [
+     "yellow",
+     "yellow",
+     "orange"
+    ]
+   ],
+   "lower_left": [
+    [
+     "red",
+     "orange",
+     "white"
+    ],
+    [
+     "blue",
+     "blue",
+     "white"
+    ],
+    [
+     "red",
+     "white",
+     "blue"
+    ]
+   ],
+   "lower_right": [
+    [
+     "blue",
+     "green",
+     "orange"
+    ],
+    [
+     "green",
+     "red",
+     "white"
+    ],
+    [
+     "red",
+     "yellow",
+     "green"
+    ]
+   ]
+  }
+ ],
+ "log": {
+  "rounds": [
+   {
+    "round": 0,
+    "accepted": "locate"
+   }
+  ],
+  "repairs": [],
+  "pools": [
+   [
+    {
+     "top": [
+      [
+       "white",
+       "green",
+       "orange"
+      ],
+      [
+       "red",
+       "white",
+       "orange"
+      ],
+      [
+       "yellow",
+       "red",
+       "red"
+      ]
+     ],
+     "lower_left": [
+      [
+       "green",
+       "yellow",
+       "white"
+      ],
+      [
+       "red",
+       "orange",
+       "blue"
+      ],
+      [
+       "blue",
+       "orange",
+       "green"
+      ]
+     ],
+     "lower_right": [
+      [
+       "green",
+       "blue",
+       "yellow"
+      ],
+      [
+       "white",
+       "green",
+       "orange"
+      ],
+      [
+       "orange",
+       "blue",
+       "blue"
+      ]
+     ]
+    }
+   ],
+   [
+    {
+     "top": [
+      [
+       "white",
+       "yellow",
+       "yellow"
+      ],
+      [
+       "green",
+       "yellow",
+       "red"
+      ],
+      [
+       "yellow",
+       "yellow",
+       "orange"
+      ]
+     ],
+     "lower_left": [
+      [
+       "red",
+       "orange",
+       "white"
+      ],
+      [
+       "blue",
+       "blue",
+       "white"
+      ],
+      [
+       "red",
+       "white",
+       "blue"
+      ]
+     ],
+     "lower_right": [
+      [
+       "blue",
+       "green",
+       "orange"
+      ],
+      [
+       "green",
+       "red",
+       "white"
+      ],
+      [
+       "red",
+       "yellow",
+       "green"
+      ]
+     ]
+    }
+   ]
+  ],
+  "rotations": {
+   "examples/phone3_green_white_orange.jpg": 0.0,
+   "examples/phone3_yellow_blue_red.jpg": 0.0
+  },
+  "crops": {
+   "examples/phone3_green_white_orange.jpg": null,
+   "examples/phone3_yellow_blue_red.jpg": null
+  }
+ }
+}

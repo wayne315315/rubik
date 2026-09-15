@@ -87,6 +87,10 @@ def snap(arr, cx, cy, size):
     Sticker interiors are flat; gaps, edges, logos and the table are not."""
     h, w = arr.shape[:2]
     r = max(2, int(size * 0.18))
+    # colour of the sticker under the raw point (small patch, dark pixels removed):
+    # candidates must keep that colour, so the point cannot wander onto a
+    # neighbouring sticker or a bright table next to the cube
+    ref = patch_color(arr, cx, cy, max(2, int(size * 0.10)))
     best, best_score = (cx, cy), None
     for dy in np.linspace(-0.35, 0.35, 9) * size:
         for dx in np.linspace(-0.35, 0.35, 9) * size:
@@ -96,6 +100,8 @@ def snap(arr, cx, cy, size):
             if x1 - x0 < 3 or y1 - y0 < 3:
                 continue
             patch = arr[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32) / 255
+            if np.linalg.norm(patch.mean(0) - ref) > 0.18:
+                continue
             v = patch.max(1).mean()
             score = patch.std(0).sum() + (0.5 if v < 0.3 else 0.0) + 0.02 * math.hypot(dx, dy) / size
             if best_score is None or score < best_score:
@@ -331,11 +337,16 @@ def patch_color(arr, x, y, r):
     return np.median(bright, 0)
 
 
+V_WEIGHT = 0.25     # brightness matters only to separate white from the rest; shading
+                    # must not pull a bright red towards orange or a dark orange towards red
+
+
 def features(rgb):
-    """(s*cos h, s*sin h, v): hue direction scaled by saturation, plus brightness."""
+    """(s*cos h, s*sin h, V_WEIGHT*v): hue direction scaled by saturation, plus a
+    little brightness."""
     x = hsv(np.asarray(rgb, dtype=float))
     ang = x[..., 0] * 2 * np.pi
-    return np.stack([x[..., 1] * np.cos(ang), x[..., 1] * np.sin(ang), x[..., 2]], -1)
+    return np.stack([x[..., 1] * np.cos(ang), x[..., 1] * np.sin(ang), V_WEIGHT * x[..., 2]], -1)
 
 
 REFERENCE = {                 # typical sticker colours under daylight, as (hue deg, sat, val)
@@ -349,22 +360,61 @@ def _ref_features():
     for c in COLORS:
         hh, ss, vv = REFERENCE[c]
         a = math.radians(hh)
-        out.append([ss * math.cos(a), ss * math.sin(a), vv])
+        out.append([ss * math.cos(a), ss * math.sin(a), V_WEIGHT * vv])
     return np.array(out)
 
 
+def _hungarian(cost):
+    """Minimum-cost assignment of rows to columns (rows <= columns), O(n^3)."""
+    n, m = cost.shape
+    cost = cost.tolist()
+    INF = float("inf")
+    u, v, p, way = [0.0] * (n + 1), [0.0] * (m + 1), [0] * (m + 1), [0] * (m + 1)
+    for i in range(1, n + 1):
+        p[0], j0 = i, 0
+        minv, used = [INF] * (m + 1), [False] * (m + 1)
+        while True:
+            used[j0] = True
+            i0, delta, j1 = p[j0], INF, 0
+            row = cost[i0 - 1]
+            for j in range(1, m + 1):
+                if not used[j]:
+                    cur = row[j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j], way[j] = cur, j0
+                    if minv[j] < delta:
+                        delta, j1 = minv[j], j
+            for j in range(m + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    out = [0] * n
+    for j in range(1, m + 1):
+        if p[j]:
+            out[p[j] - 1] = j - 1
+    return out
+
+
 def _balanced(feat, centres, per_color):
-    """Greedy balanced assignment of samples to colour centres (per_color each)."""
+    """Optimal balanced assignment of samples to colour centres, exactly
+    per_color samples per colour (Hungarian algorithm over colour slots)."""
     d = np.linalg.norm(feat[:, None] - centres[None], axis=2)
-    n = len(feat)
-    order = np.dstack(np.unravel_index(np.argsort(d, axis=None), d.shape))[0]
-    label, count = [None] * n, [0] * len(COLORS)
-    for i, c in order:
-        if label[i] is None and count[c] < per_color:
-            label[i], count[c] = int(c), count[c] + 1
-        if all(l is not None for l in label):
-            break
-    return np.array(label)
+    cost = np.repeat(d, per_color, axis=1)                  # slot c*per_color+s -> colour c
+    if cost.shape[1] < cost.shape[0]:
+        raise LocateError("more samples than colour slots")
+    col = _hungarian(cost)
+    return np.array([c // per_color for c in col])
 
 
 def classify(rgb, per_color=9, iterations=4):
@@ -421,6 +471,61 @@ def measure(arr, groups):
     return cells, np.asarray(samples)
 
 
+def label_views(per_photo, max_swaps=40):
+    """(cells, samples) per photo -> view dicts with colour labels.
+
+    Labels come from the balanced classifier. If they do not describe a legal
+    cube, the least certain stickers are re-examined: every swap of two labels
+    whose samples are each close to the other's colour is tried, cheapest first,
+    and the first swap that yields a legal state is taken."""
+    from cube_vision import state_from_views, CubeReadError
+    samples = np.concatenate([s for _, s in per_photo])
+    per_color = 9 if len(samples) == 54 else len(samples)
+    labels = [COLORS.index(c) for c in classify(samples, per_color)]
+
+    def build(lab):
+        views, k = [], 0
+        for cells, _ in per_photo:
+            view = {g: [[None] * 3 for _ in range(3)] for g in GRIDS}
+            for (g, i, j) in cells:
+                view[g][i][j] = COLORS[lab[k]]
+                k += 1
+            views.append(view)
+        return views
+
+    views = build(labels)
+    if len(samples) != 54:
+        return views
+    try:
+        state_from_views(views)
+        return views
+    except CubeReadError:
+        pass
+    feat = features(samples)
+    lab = np.array(labels)
+    centres = np.array([feat[lab == c].mean(0) for c in range(len(COLORS))])
+    d = np.linalg.norm(feat[:, None] - centres[None], axis=2)
+    cur = d[np.arange(54), lab]
+    cand = []
+    for i in range(54):
+        for j in range(i + 1, 54):
+            if lab[i] == lab[j]:
+                continue
+            extra = d[i, lab[j]] + d[j, lab[i]] - cur[i] - cur[j]
+            cand.append((extra, i, j))
+    cand.sort()
+    for extra, i, j in cand[:max_swaps]:
+        trial = lab.copy()
+        trial[i], trial[j] = trial[j], trial[i]
+        v = build(list(trial))
+        try:
+            state_from_views(v)
+            return v
+        except CubeReadError:
+            continue
+    return views
+
+
 def read_photos(reader, paths, max_side=1024):
     """Two photos -> list of view dicts (one per photo) using locate-then-measure."""
     per_photo = []
@@ -435,13 +540,4 @@ def read_photos(reader, paths, max_side=1024):
                 last = e
         else:
             raise LocateError(f"{p}: {last}")
-    all_samples = np.concatenate([s for _, s in per_photo])
-    labels = classify(all_samples, per_color=9 if len(all_samples) == 54 else len(all_samples))
-    views, k = [], 0
-    for cells, samples in per_photo:
-        view = {g: [[None] * 3 for _ in range(3)] for g in GRIDS}
-        for (g, i, j) in cells:
-            view[g][i][j] = labels[k]
-            k += 1
-        views.append(view)
-    return views
+    return label_views(per_photo)
