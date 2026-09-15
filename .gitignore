@@ -115,3 +115,6 @@ ENV/
 
 # phone uploads (photos, readings, videos)
 uploads/
+synth/real/*.jpg
+synth/ckpt/
+synth/preview.jpg
