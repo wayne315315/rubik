@@ -106,20 +106,22 @@ def snap(arr, cx, cy, size):
 # ----------------------------------------------------------------------------
 # 2. lattice ordering of nine points
 # ----------------------------------------------------------------------------
-def lattice(points, max_resid=0.35):
-    """Fit a 3x3 lattice to N >= 9 points. Returns (index -> (a, b)) for the nine
-    points used (a, b in {0,1,2}), the basis (origin, u, v) and the leftover
-    point indices.
+def lattice(points, max_resid=0.35, allow_missing=0):
+    """Fit a 3x3 lattice to N points. Returns (pts9, used, leftover): pts9 is a (9, 2)
+    array ordered by cell (row-major, cell k = (k // 3, k % 3)), used maps cell index
+    -> input index (or None for a cell predicted from the affine fit), leftover lists
+    the input indices not used.
 
     Every point is tried as the middle cell and every pair of the others as a
-    basis; the candidate whose nine best-fitting points cover {-1,0,1}^2 with the
-    smallest least-squares affine residual wins. This copes with perspective
-    shear (a corner cell can be nearer to the middle than an edge cell) and with
-    extra points that belong to another face."""
+    basis; the candidate whose best-fitting points cover {-1,0,1}^2 (up to
+    allow_missing cells absent) with the smallest least-squares affine residual
+    wins. This copes with perspective shear (a corner cell can be nearer to the
+    middle than an edge cell), with extra points from another face, and with a
+    sticker the model missed."""
     pts = np.asarray(points, dtype=float)
     n = len(pts)
-    if n < 9:
-        raise LocateError(f"a face needs 9 stickers, got {n}")
+    if n < 9 - allow_missing:
+        raise LocateError(f"a face needs at least {9 - allow_missing} stickers, got {n}")
     full = {(i, j) for i in (-1, 0, 1) for j in (-1, 0, 1)}
     best = None
     for ci in range(n):
@@ -140,22 +142,33 @@ def lattice(points, max_resid=0.35):
                     r = np.abs(ab[k] - rounded[k]).max()
                     if cell not in chosen or r < chosen[cell][1]:
                         chosen[cell] = (k, r)
-                if set(chosen) != full:
+                if len(full - set(chosen)) > allow_missing:
                     continue
-                sel = np.array([chosen[c][0] for c in sorted(chosen)])
-                grid = np.array([c for c in sorted(chosen)], dtype=float)
-                A = np.hstack([grid, np.ones((9, 1))])
+                cells = sorted(chosen)
+                sel = np.array([chosen[c][0] for c in cells])
+                grid = np.array(cells, dtype=float)
+                A = np.hstack([grid, np.ones((len(cells), 1))])
                 coef, *_ = np.linalg.lstsq(A, pts[sel], rcond=None)
                 spacing = min(np.linalg.norm(coef[0]), np.linalg.norm(coef[1]))
                 resid = np.linalg.norm(A @ coef - pts[sel], axis=1).max() / spacing
-                if resid < max_resid and (best is None or resid < best[0]):
-                    best = (resid, sel, grid, coef)
+                score = resid + 0.1 * (9 - len(cells))             # prefer complete faces
+                if resid < max_resid and (best is None or score < best[0]):
+                    best = (score, chosen, coef)
     if best is None:
         raise LocateError("sticker points do not sit on a 3x3 lattice")
-    _, sel, grid, coef = best
-    idx = {int(k): (int(g[0]) + 1, int(g[1]) + 1) for k, g in zip(sel, grid)}
-    leftover = [k for k in range(n) if k not in idx]
-    return idx, (coef[2] - coef[0] - coef[1], coef[0], coef[1]), leftover
+    _, chosen, coef = best
+    pts9, used = [], []
+    for i in (-1, 0, 1):
+        for j in (-1, 0, 1):
+            if (i, j) in chosen:
+                k = chosen[(i, j)][0]
+                pts9.append(pts[k])
+                used.append(int(k))
+            else:                                                  # predicted position
+                pts9.append(coef[0] * i + coef[1] * j + coef[2])
+                used.append(None)
+    leftover = [k for k in range(n) if k not in used]
+    return np.asarray(pts9), used, leftover
 
 
 def dedupe(points, min_dist):
@@ -168,32 +181,30 @@ def dedupe(points, min_dist):
 
 
 def regroup(groups, strict=0.28):
-    """Turn the model's rough face groups into exactly three sets of nine points.
+    """Turn the model's rough face groups into three (9, 2) arrays ordered by cell.
 
     The model's grouping is only a hint (it is wrong on tilted photos), so the
-    27 de-duplicated points are split geometrically: pull out the nine points
-    that best form a lattice, then the best nine of the rest, then the last
-    nine. If that fails, fall back to the model's groups with leftovers passed
-    to short groups."""
+    de-duplicated points are split geometrically: pull out the nine points that
+    best form a lattice, then the best nine of the rest, then the last nine. A
+    face may be completed from eight points when the model missed a sticker.
+    If that fails, fall back to the model's groups with leftovers passed on."""
     all_pts = [np.asarray(p, dtype=float) for g in groups for p in g]
-    if len(all_pts) < 27:
+    if len(all_pts) < 24:
         raise LocateError(f"only {len(all_pts)} sticker boxes for three faces")
     d = np.sort(np.linalg.norm(np.array(all_pts)[:, None] - np.array(all_pts)[None], axis=2), 1)[:, 1]
     spacing = float(np.median(d))
     pool = dedupe(all_pts, 0.4 * spacing)
-    if len(pool) < 27:
-        raise LocateError(f"only {len(pool)} distinct sticker points")
-    # geometric extraction
     remaining, faces = list(pool), []
     try:
-        for _ in range(3):
-            idx, _, left = lattice(remaining, max_resid=strict)
-            faces.append(np.asarray([remaining[i] for i in idx]))
+        for step in range(3):
+            faces_left = 3 - step
+            allow = 1 if len(remaining) < 9 * faces_left else 0
+            pts9, used, left = lattice(remaining, max_resid=strict, allow_missing=allow)
+            faces.append(pts9)
             remaining = [remaining[i] for i in left]
         return faces
     except LocateError:
         pass
-    # fallback: model groups, biggest first, leftovers offered to the next
     clean, seen = [], []
     for g in groups:
         keep = []
@@ -208,10 +219,8 @@ def regroup(groups, strict=0.28):
     faces, leftovers = [None] * 3, []
     for k in sorted(range(3), key=lambda k: -len(clean[k])):
         cand = clean[k] + leftovers
-        if len(cand) < 9:
-            raise LocateError(f"a face has only {len(cand)} sticker points")
-        idx, _, left = lattice(cand)
-        faces[k] = np.asarray([cand[i] for i in idx])
+        pts9, used, left = lattice(cand, allow_missing=1)
+        faces[k] = pts9
         leftovers = [cand[i] for i in left]
     return faces
 
@@ -225,7 +234,8 @@ def assign_faces(face_points):
     of cube_vision (top[i][j], lower_left[i][j], lower_right[i][j])."""
     if len(face_points) != 3:
         raise LocateError(f"need 3 faces, got {len(face_points)}")
-    lat = [lattice(p)[:2] for p in face_points]
+    # each face is a (9, 2) array ordered by cell, as returned by lattice()/regroup()
+    lat = [{k: (k // 3, k % 3) for k in range(9)} for _ in face_points]
     cents = [np.asarray(p).mean(0) for p in face_points]
     C = np.mean(np.concatenate([np.asarray(p) for p in face_points]), 0)     # cube centre
     # clockwise angle of each face centroid around C, measured from straight up
@@ -239,7 +249,7 @@ def assign_faces(face_points):
     out = {}
     for name, k in roles.items():
         pts = np.asarray(face_points[k], dtype=float)
-        idx, (origin, u, v) = lat[k]
+        idx = lat[k]
         cell_pt = {ab: pts[i] for i, ab in idx.items()}
         near = min(cell_pt, key=lambda ab: np.linalg.norm(cell_pt[ab] - C))      # near-corner cell
         if near not in {(0, 0), (0, 2), (2, 0), (2, 2)}:
