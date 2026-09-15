@@ -40,6 +40,10 @@ Measured on three photo pairs:
 
 The colour-reading ladder below remains as the fallback (rounds 1 and up).
 
+On the `exp` branch the model call of round 0 can be replaced by a small CNN
+trained on synthetic renders (`--detector cnn`, see `synth/README.md`); the
+whole pipeline then runs on the CPU of wayne-kv in a few seconds per pair.
+
 Measured on the two example photos (54 stickers, hand-read ground truth in
 `examples/reading.json`), one request per photo unless stated:
 

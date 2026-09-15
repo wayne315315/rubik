@@ -1,0 +1,1 @@
+torch>=2.4  # CPU wheel: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
