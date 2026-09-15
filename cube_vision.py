@@ -31,7 +31,10 @@ the three centre stickers; a mirror-image (impossible) view is rejected by a
 handedness check.
 
 Reading strategy (measured on the example photos, see COOKBOOK.md):
-  round 1  one request per photo, thinking on                 -> 54/54 stickers
+  round 0  locate-then-measure (cube_locate.py): the model only finds the
+           sticker boxes, code sorts them into faces and grids and reads the
+           colours from the pixels -> correct state on every test pair, 2 calls
+  round 1  one request per photo, thinking on (colour reading) -> 54/54 stickers
   round 2  one request per face, thinking off (fast extra votes) -> 52/54
   round 3+ re-read with the validation error as feedback and majority-vote all
            readings so far
@@ -54,7 +57,7 @@ import urllib.request
 from collections import Counter
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from r3 import index, coords, c2i, b2i, rs, RotationSequence
 from visual import hex as FACE_HEX
@@ -185,7 +188,7 @@ def encode_image(path, max_side=1024, rotate=0.0, crop=None):
     """Downscale to max_side px (1024 read best in tests), optionally cropping to a
     box (fractions of width/height) and rotating counter-clockwise by `rotate`
     degrees first, and return JPEG bytes."""
-    img = Image.open(path).convert("RGB")
+    img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")   # honour phone EXIF rotation
     if crop:
         w, h = img.size
         img = img.crop((int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h)))
@@ -232,17 +235,20 @@ class Reader:
         self.crops = {}                           # image path -> crop box (fractions) or None
 
     def chat(self, image, prompt, schema, temperature=0.0, rotate=0.0, think=None, crop=None, seed=None):
-        """Send one image + prompt, return the parsed JSON object."""
+        """Send one image file + prompt, return the parsed JSON object."""
+        data = encode_image(image, self.max_side, rotate, crop)
+        return self.chat_raw(base64.b64encode(data).decode(), prompt, schema, temperature, think, seed)
+
+    def chat_raw(self, image_b64, prompt, schema, temperature=0.0, think=None, seed=None):
+        """Send an already-encoded JPEG + prompt, return the parsed JSON object."""
         self.calls += 1
         t0 = time.time()
-        data = encode_image(image, self.max_side, rotate, crop)
         payload = {"model": self.model, "stream": False, "format": schema,
                    "think": self.think if think is None else think,
                    "options": {"temperature": temperature, "num_ctx": self.num_ctx,
                                "num_predict": self.num_predict,
                                "seed": self.seed if seed is None else seed},
-                   "messages": [{"role": "user", "content": prompt,
-                                 "images": [base64.b64encode(data).decode()]}]}
+                   "messages": [{"role": "user", "content": prompt, "images": [image_b64]}]}
         reply = _post(self.base_url + "/api/chat", payload)["message"]["content"]
         if self.verbose:
             print(f"    {self.model} replied in {time.time() - t0:.0f}s")
@@ -525,13 +531,41 @@ def repair(views, pools=None, verbose=True):
     return None, views, []
 
 
-def read_state(image_paths, reader, attempts=4, verbose=True):
+def read_state(image_paths, reader, attempts=4, verbose=True, locate=True):
     """Read photos with escalating strategies until the reading is a legal cube.
 
     Returns (state, views, log) where log records rounds, errors and repairs."""
     pools = [[] for _ in image_paths]
     log = {"rounds": [], "repairs": []}
     error = None
+    if locate:                                   # round 0: model locates, code measures
+        import cube_locate
+        if verbose:
+            print("round 0: locate stickers, measure colours from pixels")
+        try:
+            views = cube_locate.read_photos(reader, image_paths)
+            for k, v in enumerate(views):
+                pools[k].append(v)
+            try:
+                state = state_from_views(views, verbose=verbose)
+                log["rounds"].append({"round": 0, "accepted": "locate"})
+                log["pools"] = pools
+                return state, views, log
+            except CubeReadError as e:
+                error = str(e)
+                log["rounds"].append({"round": 0, "candidate": "locate", "error": error})
+                if verbose:
+                    print(f"  locate reading rejected: {error}")
+                state, fixed, edits = repair(views, pools, verbose=verbose)
+                if state is not None:
+                    log["repairs"] = edits
+                    log["rounds"].append({"round": 0, "accepted": "locate + repair"})
+                    log["pools"] = pools
+                    return state, fixed, log
+        except cube_locate.LocateError as e:
+            log["rounds"].append({"round": 0, "candidate": "locate", "error": str(e)})
+            if verbose:
+                print(f"  locate failed: {e}")
     for rnd in range(1, attempts + 1):
         if verbose:
             how = {1: "one request per photo", 2: "one request per face"}.get(rnd, "re-read with feedback")
@@ -604,6 +638,8 @@ def main():
                         help="crop the photo to the cube (model bounding box) before reading; useful when the cube is small in the frame")
     parser.add_argument("--seed", type=int, default=1, help="random seed sent to the model for reproducible runs")
     parser.add_argument("--attempts", type=int, default=5, help="reading rounds before giving up")
+    parser.add_argument("--no-locate", action="store_true",
+                        help="skip round 0 (model locates stickers, code reads colours from pixels)")
     parser.add_argument("--save-json", default=None, help="write the accepted reading and log to this file")
     parser.add_argument("--from-json", default=None, help="skip the model and use a saved reading")
     parser.add_argument("--optimal", action="store_true",
@@ -627,7 +663,7 @@ def main():
         reader = Reader(args.base_url, args.model, think=not args.no_think, crop=args.crop, seed=args.seed)
         t0 = time.time()
         try:
-            state, views, log = read_state(args.images, reader, args.attempts)
+            state, views, log = read_state(args.images, reader, args.attempts, locate=not args.no_locate)
         except CubeReadError as e:                    # keep every reading for debugging
             if args.save_json and getattr(e, "log", None):
                 with open(args.save_json, "w") as fh:

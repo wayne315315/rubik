@@ -264,6 +264,7 @@ Face colors follow the standard scheme: `x+` blue, `x-` green, `y+` red,
 | `optimal.py`      | Optimal IDA* solver with pattern databases, `solve`             |
 | `gods_number.py`  | Bounds on God's number for the r3 move set                     |
 | `cube_vision.py`  | Two photos → cube state → `RotationSequence` via an open-source VLM |
+| `cube_locate.py`  | Locate-then-measure perception: model finds stickers, code reads colours |
 | `upload_server.py`| Phone-friendly upload page that runs the photo pipeline         |
 | `COOKBOOK.md`     | Walkthrough for the photo pipeline                              |
 | `examples/`       | Example photos and hand-read `reading.json` / `reading2.json` fixtures |

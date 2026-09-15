@@ -7,15 +7,38 @@ hardware: the model on a DGX Spark on the LAN (Ollama at `192.168.1.254:11434`),
 the rest on any machine with this repo. The whole pipeline is `cube_vision.py`.
 
 ```
-photo ──► VLM reads 27 stickers (per photo) ──► JSON grids ──► geometry ──► colours at 54 positions
-                 ▲                                                               │
-                 │  re-read per face / re-read with the error / majority vote     ▼
-                 └────────────────────────────────── reject ◄── validation ──► r3 state
-                                                       │ (unique fix)              │
-                                                       └── bounded repair ─────────┘
+photo ──► VLM locates the 27 stickers (boxes) ──► code: snap, lattice, face roles,
+                                                  colours from pixels (9 per colour)
+                                                              │
+   fallback: VLM reads colours (thinking) ──► re-read per face / with feedback / vote
+                 ▲                                            ▼
+                 └──────────────────── reject ◄── validation ──► r3 state
+                                          │ (unique fix)          │
+                                          └── bounded repair ─────┘
 r3 state ──► thistlethwaite.solve / optimal.solve ──► RotationSequence (answer)
                                                   └─► inverse = scramble
 ```
+
+**Round 0, locate-then-measure (`cube_locate.py`), is the primary path.** The
+model is only asked *where* the stickers are, which it does well and fast (one
+call per photo, about 20 s, no thinking). Code does the rest: each box centre is
+snapped to the most uniform nearby patch (sticker interiors are flat, gaps and
+logos are not), the 27 points are split into three faces by repeatedly pulling
+out the nine points that best form a 3×3 lattice (the model's own grouping is
+ignored, it is wrong on tilted photos), the face roles and grid orientation come
+from the geometry (near-corner cell, shared edges), and colours are measured
+from the pixels and classified with the constraint of exactly nine stickers per
+colour, adapting to the photo's white balance. Position slips and misread centre
+stickers, the failure modes of asking the model for colours, cannot happen.
+Measured on three photo pairs:
+
+| Pair                                   | Result                       | Calls | Time |
+| -------------------------------------- | ---------------------------- | ----- | ---- |
+| first example                          | state equals ground truth    | 2     | 42 s |
+| tilted second example (one photo 45°)  | state equals ground truth    | 2     | 41 s |
+| phone pair the colour-reading path never solved | legal state          | 2     | 41 s |
+
+The colour-reading ladder below remains as the fallback (rounds 1 and up).
 
 Measured on the two example photos (54 stickers, hand-read ground truth in
 `examples/reading.json`), one request per photo unless stated:
@@ -48,7 +71,7 @@ accepted in round 1. Cropping the photo to the cube first (the model finds the
 bounding box in 3 s; `--crop`) did not reduce the errors on these photos and
 changed which stickers fail, so it is off by default.
 
-## 1. Why this shape
+## 1. Why this shape (and the fallback path)
 
 A vision-language-action model maps pixels to actions. For a cube, asking a model to
 emit moves directly is fragile: the move sequence depends on all 54 stickers at once,
@@ -188,12 +211,13 @@ Every check raises `CubeReadError` with a sentence meant for the model:
 The last check is `thistlethwaite.solve` itself, which raises for any state outside
 the cube group.
 
-`read_state` escalates through rounds until a candidate passes (every read uses
-the crop and rotation found by the preparation steps, and every call carries a
-fixed seed so identical inputs give identical outputs; round 3+ uses a different
-seed per round for diversity):
+`read_state` escalates through rounds until a candidate passes (round 0 is the
+locate-then-measure path above; the colour-reading rounds use the rotation found
+by the orientation step, and every call carries a fixed seed so identical inputs
+give identical outputs; round 3+ uses a different seed per round for diversity):
 
-1. **Round 1:** one request per photo, thinking on. On easy photos this is enough.
+0. **Round 0:** locate-then-measure. Accepted directly, or after a unique repair.
+1. **Round 1:** one request per photo, thinking on (colour reading).
 2. **Round 2:** one request per face (three per photo) without thinking: fast extra
    votes, and the model tracks one grid at a time.
 3. **Round 3+:** re-read each photo with the rejection sentence appended, thinking
