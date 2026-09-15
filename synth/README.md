@@ -21,7 +21,7 @@ photo ──► KeypointNet (0.53 M params, 256 px, stride-4 heatmap) ──► 
 | `synth/train.py`     | CPU training on rendered data, evaluation on real photos, checkpoints     |
 | `synth/real/*.json`  | Sticker-centre labels of real photos (normalised x, y), used for evaluation |
 | `cube_keypoints.py`  | Inference: photo → points → `cube_locate.measure()`                       |
-| `synth/ckpt/best.pt` | Trained weights (untracked; produced by training)                         |
+| `synth/ckpt/best.pt`, `alt.pt` | Trained weights (committed, 2 MB each; `synth/train.py` regenerates them) |
 
 ## Synthetic data
 
