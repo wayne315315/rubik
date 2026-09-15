@@ -58,9 +58,12 @@ Threads beyond the 96 physical cores do not help (the workload is bandwidth
 bound, hyper-threads only compete), so a 50 % reading in `top` is the machine
 fully used. bf16 uses the CPU's avx512_bf16 units and is the real speed-up.
 
-Real-photo PCK reaches 0.95 after 250 steps and 0.99 after 500 steps of the
-bf16 run; the step-500 checkpoint already gives the correct cube state on every
-photo pair we have.
+Real-photo PCK reaches 0.95 after 250 steps and plateaus at 0.98-0.99 from
+step 500 on (8000 steps, batch 64, about 50 minutes). `best.pt` is the step-6250
+checkpoint (PCK 0.989); `alt.pt` is the step-500 checkpoint, used as a second
+opinion when the three-face split fails with the first, since the two make
+different localisation slips on the same hard photo. Both are committed (2 MB
+each).
 
 ## Using it
 
@@ -77,8 +80,8 @@ state = state_from_views(read_photos(["A.jpg", "B.jpg"]))
 answer, scramble = solve_state(state)
 ```
 
-Two photos take 4-6 s in total, most of it the geometry and colour code, not the
-network. Results on the three real pairs (step-500 checkpoint):
+Two photos take 2-7 s in total, most of it the geometry and colour code, not the
+network. Results on the three real pairs (`best.pt` with the `alt.pt` fallback):
 
 | Pair                          | CNN result                                |
 | ----------------------------- | ----------------------------------------- |

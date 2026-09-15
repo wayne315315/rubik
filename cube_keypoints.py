@@ -19,6 +19,7 @@ import cube_locate
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CKPT = os.path.join(ROOT, "synth", "ckpt", "best.pt")
+ALT_CKPT = os.path.join(ROOT, "synth", "ckpt", "alt.pt")       # second opinion when the split fails
 _MODEL = {}
 
 
@@ -61,12 +62,14 @@ def measure_photo(path, max_side=1024, ckpt=DEFAULT_CKPT):
     """cube_locate.measure() on the CNN points; retries with a few extra peaks
     when the top-27 do not split into three faces."""
     last = None
-    for keep in (27, 28, 30, 33):
-        try:
-            arr, groups = locate_points(path, max_side, ckpt, keep)
-            return cube_locate.measure(arr, groups)
-        except cube_locate.LocateError as e:
-            last = e
+    ckpts = [ckpt] + ([ALT_CKPT] if ckpt == DEFAULT_CKPT and os.path.exists(ALT_CKPT) else [])
+    for ck in ckpts:
+        for keep in (27, 28, 30, 33):
+            try:
+                arr, groups = locate_points(path, max_side, ck, keep)
+                return cube_locate.measure(arr, groups)
+            except cube_locate.LocateError as e:
+                last = e
     raise cube_locate.LocateError(f"{path}: {last}")
 
 
