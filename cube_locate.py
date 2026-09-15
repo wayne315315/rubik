@@ -199,7 +199,13 @@ def regroup(groups, strict=0.28):
         for step in range(3):
             faces_left = 3 - step
             allow = 1 if len(remaining) < 9 * faces_left else 0
-            pts9, used, left = lattice(remaining, max_resid=strict, allow_missing=allow)
+            for tol in (strict, 0.35, 0.45):          # strict first; relax if the points are noisier
+                try:
+                    pts9, used, left = lattice(remaining, max_resid=tol, allow_missing=allow)
+                    break
+                except LocateError:
+                    if tol == 0.45:
+                        raise
             faces.append(pts9)
             remaining = [remaining[i] for i in left]
         return faces
@@ -215,7 +221,7 @@ def regroup(groups, strict=0.28):
                 keep.append(p)
         clean.append(keep)
     if len(clean) != 3:
-        raise LocateError(f"need 3 faces, got {len(clean)}")
+        raise LocateError(f"could not split {len(pool)} sticker points into three 3x3 faces")
     faces, leftovers = [None] * 3, []
     for k in sorted(range(3), key=lambda k: -len(clean[k])):
         cand = clean[k] + leftovers

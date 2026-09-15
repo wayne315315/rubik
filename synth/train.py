@@ -99,11 +99,12 @@ def main():
     ap.add_argument("--eval-every", type=int, default=250)
     ap.add_argument("--width", type=int, default=32)
     ap.add_argument("--resume", default=None)
+    ap.add_argument("--no-bf16", action="store_true", help="disable bf16 autocast (8x slower on CPUs with avx512_bf16)")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     ckdir = os.path.join(ROOT, "synth", "ckpt")
     os.makedirs(ckdir, exist_ok=True)
-    model = KeypointNet(args.width)
+    model = KeypointNet(args.width).to(memory_format=torch.channels_last)
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location="cpu")["model"])
     print(f"params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M", flush=True)
@@ -114,8 +115,10 @@ def main():
     print(f"real validation photos: {len(real)}", flush=True)
     best, t0, run = -1.0, time.time(), 0.0
     for step, (x, hm) in enumerate(loader, 1):
-        logits = model(x)
-        loss = focal_loss(logits, hm)
+        x = x.contiguous(memory_format=torch.channels_last)
+        with torch.autocast("cpu", dtype=torch.bfloat16, enabled=not args.no_bf16):
+            logits = model(x)
+        loss = focal_loss(logits.float(), hm)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)

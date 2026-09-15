@@ -33,19 +33,23 @@ def load_model(ckpt=DEFAULT_CKPT):
 
 
 @torch.no_grad()
-def detect(arr, ckpt=DEFAULT_CKPT, threshold=0.3):
-    """Sticker centres (n,2) in the coordinates of the given RGB array."""
+def detect(arr, ckpt=DEFAULT_CKPT, threshold=0.25):
+    """Sticker centres (n,3): x, y in the coordinates of the given RGB array and
+    the peak score, sorted by score (highest first)."""
     model = load_model(ckpt)
     x, (scale, dx, dy) = letterbox(Image.fromarray(arr))
     logits = model(x[None])
     peaks = extract_peaks(logits[0, 0], threshold=threshold)
-    return np.array([[(px * STRIDE) / scale - dx, (py * STRIDE) / scale - dy] for px, py, _ in peaks], dtype=float)
+    out = np.array([[(px * STRIDE) / scale - dx, (py * STRIDE) / scale - dy, sc] for px, py, sc in peaks], dtype=float)
+    return out.reshape(-1, 3)
 
 
-def locate_points(path, max_side=1024, ckpt=DEFAULT_CKPT):
-    """(image array, [points]) like cube_locate.locate_points, from the CNN."""
+def locate_points(path, max_side=1024, ckpt=DEFAULT_CKPT, keep=27):
+    """(image array, [points]) like cube_locate.locate_points, from the CNN.
+    Only the `keep` highest-scoring peaks are used (extras are usually spurious)."""
     arr = cube_locate.load_image(path, max_side)
-    pts = detect(arr, ckpt)
+    det = detect(arr, ckpt)[:keep]
+    pts = det[:, :2]
     if len(pts) >= 2:
         d = np.sort(np.linalg.norm(pts[:, None] - pts[None], axis=2), 1)[:, 1]
         size = float(np.median(d)) * 0.9
@@ -53,12 +57,22 @@ def locate_points(path, max_side=1024, ckpt=DEFAULT_CKPT):
     return arr, [pts]
 
 
+def measure_photo(path, max_side=1024, ckpt=DEFAULT_CKPT):
+    """cube_locate.measure() on the CNN points; retries with a few extra peaks
+    when the top-27 do not split into three faces."""
+    last = None
+    for keep in (27, 28, 30, 33):
+        try:
+            arr, groups = locate_points(path, max_side, ckpt, keep)
+            return cube_locate.measure(arr, groups)
+        except cube_locate.LocateError as e:
+            last = e
+    raise cube_locate.LocateError(f"{path}: {last}")
+
+
 def read_photos(paths, max_side=1024, ckpt=DEFAULT_CKPT):
     """Two photos -> list of view dicts, CNN localisation + pixel colours."""
-    per_photo = []
-    for p in paths:
-        arr, groups = locate_points(p, max_side, ckpt)
-        per_photo.append(cube_locate.measure(arr, groups))
+    per_photo = [measure_photo(p, max_side, ckpt) for p in paths]
     all_samples = np.concatenate([s for _, s in per_photo])
     labels = cube_locate.classify(all_samples, per_color=9 if len(all_samples) == 54 else len(all_samples))
     views, k = [], 0

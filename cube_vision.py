@@ -531,19 +531,23 @@ def repair(views, pools=None, verbose=True):
     return None, views, []
 
 
-def read_state(image_paths, reader, attempts=4, verbose=True, locate=True):
+def read_state(image_paths, reader, attempts=4, verbose=True, locate=True, detector="vlm"):
     """Read photos with escalating strategies until the reading is a legal cube.
 
     Returns (state, views, log) where log records rounds, errors and repairs."""
     pools = [[] for _ in image_paths]
     log = {"rounds": [], "repairs": []}
     error = None
-    if locate:                                   # round 0: model locates, code measures
+    if locate:                                   # round 0: locate stickers, code measures
         import cube_locate
         if verbose:
-            print("round 0: locate stickers, measure colours from pixels")
+            print(f"round 0: locate stickers ({detector}), measure colours from pixels")
         try:
-            views = cube_locate.read_photos(reader, image_paths)
+            if detector == "cnn":
+                import cube_keypoints
+                views = cube_keypoints.read_photos(image_paths)
+            else:
+                views = cube_locate.read_photos(reader, image_paths)
             for k, v in enumerate(views):
                 pools[k].append(v)
             try:
@@ -640,6 +644,8 @@ def main():
     parser.add_argument("--attempts", type=int, default=5, help="reading rounds before giving up")
     parser.add_argument("--no-locate", action="store_true",
                         help="skip round 0 (model locates stickers, code reads colours from pixels)")
+    parser.add_argument("--detector", choices=["vlm", "cnn"], default="vlm",
+                        help="round 0 sticker localisation: the Ollama model, or the local CNN (synth/ckpt/best.pt)")
     parser.add_argument("--save-json", default=None, help="write the accepted reading and log to this file")
     parser.add_argument("--from-json", default=None, help="skip the model and use a saved reading")
     parser.add_argument("--optimal", action="store_true",
@@ -663,7 +669,8 @@ def main():
         reader = Reader(args.base_url, args.model, think=not args.no_think, crop=args.crop, seed=args.seed)
         t0 = time.time()
         try:
-            state, views, log = read_state(args.images, reader, args.attempts, locate=not args.no_locate)
+            state, views, log = read_state(args.images, reader, args.attempts, locate=not args.no_locate,
+                                           detector=args.detector)
         except CubeReadError as e:                    # keep every reading for debugging
             if args.save_json and getattr(e, "log", None):
                 with open(args.save_json, "w") as fh:
