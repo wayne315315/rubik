@@ -337,16 +337,21 @@ def patch_color(arr, x, y, r):
     return np.median(bright, 0)
 
 
-V_WEIGHT = 0.25     # brightness matters only to separate white from the rest; shading
-                    # must not pull a bright red towards orange or a dark orange towards red
+V_WEIGHT = 0.25     # brightness only helps separate white; shading must not decide colours
+S_CAP = 0.5         # saturation beyond this carries no information (every chromatic sticker)
+S_FADE = 0.25       # hue direction is faded out below this saturation (near-grey samples)
 
 
 def features(rgb):
-    """(s*cos h, s*sin h, V_WEIGHT*v): hue direction scaled by saturation, plus a
-    little brightness."""
+    """Hue-first colour features: (cos h, sin h) faded only for near-grey samples,
+    capped saturation, and a little brightness. Hue is what survives the wild
+    exposure differences between a lit top face (pastel, low saturation) and a
+    shadowed side face (dark, saturated); saturation separates white."""
     x = hsv(np.asarray(rgb, dtype=float))
     ang = x[..., 0] * 2 * np.pi
-    return np.stack([x[..., 1] * np.cos(ang), x[..., 1] * np.sin(ang), V_WEIGHT * x[..., 2]], -1)
+    g = np.minimum(1.0, x[..., 1] / S_FADE)
+    return np.stack([g * np.cos(ang), g * np.sin(ang),
+                     1.5 * np.minimum(x[..., 1], S_CAP), V_WEIGHT * x[..., 2]], -1)
 
 
 REFERENCE = {                 # typical sticker colours under daylight, as (hue deg, sat, val)
@@ -355,13 +360,15 @@ REFERENCE = {                 # typical sticker colours under daylight, as (hue 
 }
 
 
+def _hsv_to_rgb(h, s, v):
+    h6 = (h % 360) / 60
+    i, f = int(h6) % 6, h6 - int(h6)
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    return [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i]
+
+
 def _ref_features():
-    out = []
-    for c in COLORS:
-        hh, ss, vv = REFERENCE[c]
-        a = math.radians(hh)
-        out.append([ss * math.cos(a), ss * math.sin(a), V_WEIGHT * vv])
-    return np.array(out)
+    return features(np.array([_hsv_to_rgb(*REFERENCE[c]) for c in COLORS]))
 
 
 def _hungarian(cost):

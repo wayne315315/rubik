@@ -26,6 +26,7 @@ PAIRS = {                       # name: (photo pair, reference views json or Non
     "phone3": (["phone3_yellow_blue_red", "phone3_green_white_orange"], "reading_phone3.json"),
     "desk4": (["desk4_red_blue_white", "desk4_yellow_green_orange"], "reading_desk4.json"),
     "desk5": (["desk5_red_blue_white", "desk5_yellow_green_orange"], "reading_desk5.json"),
+    "cafe6": (["cafe6_yellow_orange_blue", "cafe6_red_white_green"], "reading_cafe6.json"),
 }
 
 

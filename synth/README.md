@@ -107,6 +107,13 @@ Only `torch` (CPU wheel) on top of the main requirements, installed into `.venv`
   reds on the lit top face sat closer to the orange centre than to the dark
   reds in shadow. Brightness now enters the colour feature with weight 0.25
   (enough to separate white), hue and saturation decide the rest.
+- **Pastel top face, saturated shadowed sides** (upload 20260916-142943, cafe
+  with a strong overhead light): red turned pink and orange peach on the lit
+  top face (saturation 0.3) while the sides were dark and saturated (0.8). The
+  old feature scaled the hue direction by saturation, so pale oranges collapsed
+  toward grey and three dark reds were taken for orange. `features()` is now
+  hue-first: hue direction at full length unless the sample is near grey,
+  saturation capped at 0.5, brightness weight 0.25.
 - The greedy balanced assignment could cross-assign two close colours; it is
   now an exact Hungarian assignment over 9 slots per colour (3 ms), and when
   the labels still do not form a legal cube the cheapest label swaps are tried
